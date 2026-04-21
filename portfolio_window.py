@@ -157,30 +157,43 @@ def fetch_us_indices_with_futures() -> list:
 
     # 좌측: 한국 증시에 직접적 영향력 높은 지표
     # 우측: 간접 영향 / 보조 지표
-    # (심볼, 이름, 설명, 선물심볼, 좌/우)
+    # (심볼, 이름, 설명, 선물, 위치(L/M/R), 방향성)
     pairs = [
-        # --- 왼쪽 (핵심) ---
-        ("KRW=X", "USD/KRW", "원달러 환율 — 외국인 수급·수출주 직결", None, "L"),
-        ("EWY", "EWY", "MSCI Korea ETF — 외국인 투심 선행", None, "L"),
-        ("^N225", "Nikkei 225", "일본 대표 지수 — 아시아 동조화", "NKD=F", "L"),
-        ("^IXIC", "나스닥", "미국 기술주 중심 지수", "NQ=F", "L"),
-        ("^GSPC", "S&P 500", "미국 대형주 500선", "ES=F", "L"),
-        ("^DJI", "다우존스", "미국 산업 30대 기업", "YM=F", "L"),
-        ("^VIX", "VIX", "S&P500 변동성 — 20↑ 경계, 30↑ 공포", None, "L"),
-        ("KORU", "KORU", "MSCI Korea 3배 레버리지 ETF", None, "L"),
-        ("^SOX", "필라델피아반도체", "미국 반도체 30개사 지수", "SOX=F", "L"),
-        # --- 오른쪽 (보조) ---
-        ("SOXX", "SOXX", "미국 반도체 30개사 가중 ETF", None, "R"),
-        ("SOXL", "SOXL", "반도체 3배 레버리지 ETF", None, "R"),
-        ("^HSI", "Hang Seng", "홍콩 증시 메인 지수", None, "R"),
-        ("^TNX", "미국 10Y", "10년물 국채금리 — 성장주 벨류에이션", "ZN=F", "R"),
-        ("GC=F", "Gold", "금 선물 — 위험 회피 시 상승", None, "R"),
-        ("SI=F", "Silver", "은 선물 — 산업 수요 + 귀금속", None, "R"),
-        ("HG=F", "Copper", "구리 — \"박사 구리\" 경기 선행지표", None, "R"),
-        ("BTC-USD", "Bitcoin", "암호화폐 — 위험자산 심리", None, "R"),
-        ("DX-Y.NYB", "달러인덱스", "USD 강도 — 신흥국 자금 흐름 영향", None, "R"),
-        ("CL=F", "WTI 원유", "국제 유가 — 정유·에너지 직결", None, "R"),
-        ("NG=F", "천연가스", "에너지 — 가스·유틸리티 영향", None, "R"),
+        # --- 🌙 선행 지표 (개장 전 체크) ---
+        ("KRW=X", "USD/KRW", "원달러 환율 — 외국인 수급·수출주", None, "L", "inverse"),
+        ("EWY", "EWY", "MSCI Korea ETF — 외국인 투심", None, "L", "direct"),
+        ("KORU", "KORU", "Korea 3x 레버리지 — 외국인 신호 강도", None, "L", "direct"),
+        ("^N225", "Nikkei 225", "일본 — 아시아 동조", "NKD=F", "L", "direct"),
+        ("^IXIC", "나스닥", "미국 기술주", "NQ=F", "L", "direct"),
+        ("^GSPC", "S&P 500", "미국 대형주", "ES=F", "L", "direct"),
+        ("^DJI", "다우존스", "미국 산업주", "YM=F", "L", "direct"),
+        ("^RUT", "Russell 2000", "미국 중소형 — KOSDAQ 선행", "RTY=F", "L", "direct"),
+        ("^VIX", "VIX", "변동성 — 20↑ 경계, 30↑ 공포", None, "L", "inverse"),
+        # --- 가운데: 반도체 특화 ---
+        ("^SOX", "필라델피아반도체", "미국 반도체 30개사 지수", "SOX=F", "M", "direct"),
+        ("NVDA", "NVIDIA", "AI 칩 대장 — HBM 수요 직결 (삼전·하닉)", None, "M", "direct"),
+        ("TSM", "TSMC", "파운드리 1위 — 삼성파운드리 경쟁/업황", None, "M", "direct"),
+        ("MU", "Micron", "메모리 반도체 — 하이닉스·삼전 비교", None, "M", "direct"),
+        ("ASML", "ASML", "EUV 장비 — 반도체 장비주 선행", None, "M", "direct"),
+        ("AMAT", "Applied M.", "장비 대장 — 원익IPS·기가비스 선행", None, "M", "direct"),
+        # --- 🇰🇷 한국 현재 (주요 지수 + ETF) ---
+        ("^KS200", "KOSPI 200", "코스피 200 — 선물·옵션 기준", None, "R", "direct"),
+        ("^KQ11", "KOSDAQ", "코스닥 — 중소형주", None, "R", "direct"),
+        ("122630.KS", "KODEX 레버리지", "코스피 2x — 리테일 낙관 심리", None, "R", "direct"),
+        ("091230.KS", "TIGER 반도체", "반도체 업종 ETF — 삼전·하닉 비중", None, "R", "direct"),
+        ("229200.KS", "KODEX 코스닥150", "코스닥150 대표 ETF", None, "R", "direct"),
+        # --- 🌍 매크로 환경 (글로벌 영향) ---
+        ("^TNX", "미국 10Y", "10년물 국채금리 — 성장주 벨류에이션", "ZN=F", "MX", "inverse"),
+        ("DX-Y.NYB", "달러인덱스", "USD 강도 — 신흥국 자금 흐름", None, "MX", "inverse"),
+        ("GC=F", "Gold", "금 — 위험 회피 시 상승", None, "MX", "inverse"),
+        ("HG=F", "Copper", "구리 — 경기 선행 (\"박사 구리\")", None, "MX", "direct"),
+        ("CL=F", "WTI 원유", "국제 유가 — 정유·에너지 직결", None, "MX", "neutral"),
+        ("NG=F", "천연가스", "에너지 — 가스·유틸리티", None, "MX", "neutral"),
+        # --- 🇺🇸 한국 ADR (뉴욕 상장 한국 기업 — 야간 선행) ---
+        ("PKX", "POSCO ADR", "포스코 — 철강·소재주 선행", None, "ADR", "direct"),
+        ("LPL", "LG Display ADR", "LG디스플레이 — 디스플레이·IT주 선행", None, "ADR", "direct"),
+        ("KB", "KB Financial ADR", "KB금융 — 국내 은행주 대표", None, "ADR", "direct"),
+        ("CPNG", "Coupang", "쿠팡 — 플랫폼·유통 심리", None, "ADR", "direct"),
     ]
     import math
     def _is_valid(v):
@@ -208,8 +221,27 @@ def fetch_us_indices_with_futures() -> list:
             pass
         return None, None
 
+    def _impact(pct, fut_pct, direction):
+        """현물 + 선물 + 방향성 → (icon, color, text)
+        선물이 있으면 현물/선물 평균으로 최신 방향성 판정
+        """
+        if direction == "neutral":
+            return ("", "#888", "")
+        # 신호값: 선물 있으면 현물+선물 평균 (선물이 더 최신)
+        if fut_pct is not None:
+            signal = (pct + fut_pct) / 2
+        else:
+            signal = pct
+        if abs(signal) < 0.1:
+            return ("", "#888", "")
+        is_up = signal > 0
+        beneficial = (is_up and direction == "direct") or (not is_up and direction == "inverse")
+        if beneficial:
+            return ("+", "#c0392b", "긍정")
+        return ("-", "#1f4e8f", "부정")
+
     out = []
-    for cash, name, note, fut, side in pairs:
+    for cash, name, note, fut, side, direction in pairs:
         close, prev = _fast_quote(cash)
         if close is None:
             continue
@@ -221,9 +253,11 @@ def fetch_us_indices_with_futures() -> list:
             if fclose is not None and fprev:
                 fut_pct = (fclose - fprev) / fprev * 100
 
+        icon, icon_color, impact_text = _impact(pct, fut_pct, direction)
         out.append({
             "name": name, "note": note, "price": close, "pct": pct,
             "fut_pct": fut_pct, "side": side,
+            "impact": impact_text, "icon": icon, "icon_color": icon_color,
         })
     return out
 
@@ -340,25 +374,28 @@ class PortfolioWindow:
     # (key, 표시 이름, 픽셀 width, 정렬)
     COLS_FULL = [
         ("name", "종목", 90, "w"),
-        ("day_chg", "전일대비", 115, "e"),
         ("volume", "거래량", 70, "e"),
         ("shares", "수량", 40, "e"),
-        ("buy", "매수가", 65, "e"),
-        ("cur", "현재가", 65, "e"),
-        ("pnl", "손익%", 65, "e"),
-        ("pnl_amt", "손익금액", 85, "e"),
-        ("peak", "피크가", 65, "e"),
-        ("from_peak", "피크대비", 65, "e"),
-        ("foreign", "외국인 (보유%)", 140, "e"),
-        ("inst", "기관", 75, "e"),
-        ("pension", "연기금", 65, "e"),
-        ("fin_inv", "금융투자", 75, "e"),
-        ("trust", "투신", 65, "e"),
-        ("pef", "사모", 65, "e"),
-        ("insurance", "보험", 65, "e"),
-        ("bank", "은행", 55, "e"),
-        ("other_fin", "기타금융", 70, "e"),
-        ("other_corp", "기타법인", 70, "e"),
+        ("buy", "매수가", 95, "e"),
+        ("cur", "현재가", 95, "e"),
+        ("pnl_amt_money", "손익금액", 75, "e"),
+        ("pnl_amt_pct", "", 70, "w"),
+        ("day_chg_amt", "전일대비", 60, "e"),
+        ("day_chg_pct", "", 65, "w"),
+        ("peak_money", "피크가", 75, "e"),
+        ("peak_pct", "", 70, "w"),
+        ("indiv", "개인", 75, "e"),
+        ("foreign_amt", "외국인 (보유%)", 65, "e"),
+        ("foreign_pct", "", 60, "w"),
+        ("inst", "기관", 60, "e"),
+        ("pension", "연기금", 60, "e"),
+        ("fin_inv", "금융투자", 60, "e"),
+        ("trust", "투신", 60, "e"),
+        ("pef", "사모", 60, "e"),
+        ("insurance", "보험", 60, "e"),
+        ("bank", "은행", 60, "e"),
+        ("other_fin", "기타금융", 60, "e"),
+        ("other_corp", "기타법인", 60, "e"),
     ]
     COLS_COMPACT = [
         ("name", "종목", 120, "w"),
@@ -367,8 +404,9 @@ class PortfolioWindow:
     ]
 
     # 외국인 이전까지는 왼쪽 고정, 이후는 오른쪽 스크롤
-    FROZEN_KEYS = {"name", "day_chg", "volume", "shares", "buy", "cur",
-                   "pnl", "pnl_amt", "peak", "from_peak"}
+    FROZEN_KEYS = {"name", "day_chg_amt", "day_chg_pct", "volume", "shares",
+                   "buy", "cur", "pnl_amt_money", "pnl_amt_pct",
+                   "peak_money", "peak_pct"}
 
     @property
     def COLS(self):
@@ -467,7 +505,7 @@ class PortfolioWindow:
             left_wrap.pack(side=tk.LEFT, fill=tk.Y)
             left_hdr = tk.Frame(left_wrap, bg="#e8e8e8")
             left_hdr.pack(fill=tk.X)
-            left_rows = tk.Frame(left_wrap, bg="white")
+            left_rows = tk.Frame(left_wrap, bg="#e0e0e0")
             left_rows.pack(fill=tk.X)
 
             tk.Frame(body, width=2, bg="#ccc").pack(side=tk.LEFT, fill=tk.Y)
@@ -481,7 +519,7 @@ class PortfolioWindow:
             canvas.create_window((0, 0), window=inner, anchor="nw")
             right_hdr = tk.Frame(inner, bg="#e8e8e8")
             right_hdr.pack(fill=tk.X, anchor="w")
-            right_rows = tk.Frame(inner, bg="white")
+            right_rows = tk.Frame(inner, bg="#e0e0e0")
             right_rows.pack(fill=tk.X, anchor="w")
 
             def _on_resize(event=None):
@@ -552,6 +590,13 @@ class PortfolioWindow:
             command=self._toggle_topmost,
         ).pack(side=tk.LEFT, padx=6)
 
+        self.maximize_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            bottom, text="가로 최대",
+            variable=self.maximize_var,
+            command=self._toggle_maximize,
+        ).pack(side=tk.LEFT, padx=3)
+
         tk.Label(bottom, text="투명도", font=("SF Pro", 9), foreground="#666").pack(side=tk.LEFT, padx=(8, 2))
         self.alpha_scale = tk.Scale(
             bottom, from_=0.3, to=1.0, resolution=0.05,
@@ -569,29 +614,75 @@ class PortfolioWindow:
         ttk.Button(bottom, text="종료", command=self.root.quit).pack(side=tk.RIGHT)
 
     def _render_header(self):
-        """헤더 재구성 — 왼쪽 고정 / 오른쪽 스크롤 각각"""
+        """헤더 재구성 — title=='' 인 컬럼은 이전 컬럼과 병합"""
         def render_to(target, cols):
             if target is None:
                 return
             for w in target.winfo_children():
                 w.destroy()
-            for idx, (key, title, width, align) in enumerate(cols):
-                anchor = {"w": "w", "e": "e", "center": "center"}[align]
+            idx = 0
+            while idx < len(cols):
+                key, title, pw, align = cols[idx]
+                # 다음 컬럼이 이어진(title="") 것이면 합쳐서 렌더
+                span = 1
+                total_w = pw
+                j = idx + 1
+                while j < len(cols) and cols[j][1] == "":
+                    span += 1
+                    total_w += cols[j][2]
+                    j += 1
+                anchor = "center" if span > 1 else {"w":"w","e":"e","center":"center"}[align]
                 tk.Label(
-                    target, text=title, width=max(5, width // 8),
+                    target, text=title if title else "",
+                    width=max(5, total_w // 8),
                     font=("SF Pro", 9, "bold"), bg="#e8e8e8", fg="#222",
-                    anchor=anchor, padx=2, pady=2,
-                ).grid(row=0, column=idx, sticky="nsew")
+                    anchor=anchor, padx=2, pady=3,
+                    borderwidth=0,
+                ).grid(row=0, column=idx, columnspan=span, sticky="nsew")
+                idx += span
 
-        # 일반
         render_to(self.header_frame, self.COLS_LEFT)
         render_to(getattr(self, "header_frame_r", None), self.COLS_RIGHT)
-        # 퇴직연금
         render_to(getattr(self, "pension_header_frame", None), self.COLS_LEFT)
-        render_to(getattr(self, "pension_header_frame_r", None), self.COLS_RIGHT)
 
     def _toggle_topmost(self):
         self.root.attributes("-topmost", self.topmost_var.get())
+
+    def _toggle_maximize(self):
+        """가로 최대 — 현재 창이 위치한 모니터의 가로 전체로 확장 (위치 이동 없음)"""
+        self.root.update_idletasks()
+        cur_x = self.root.winfo_x()
+        cur_y = self.root.winfo_y()
+        h = self.root.winfo_reqheight()
+
+        if self.maximize_var.get():
+            # 현재 창이 있는 모니터의 크기 파악 (macOS PyObjC 우선, 실패 시 폴백)
+            mon_x, mon_w = self._current_monitor_frame(cur_x, cur_y)
+            self.root.geometry(f"{mon_w}x{h}+{mon_x}+{cur_y}")
+        else:
+            default_w = 400 if self.compact_mode else 1400
+            self.root.geometry(f"{default_w}x{h}+{cur_x}+{cur_y}")
+
+    def _current_monitor_frame(self, x, y):
+        """창 좌표 (x,y) 가 있는 모니터의 (origin_x, width) 반환"""
+        try:
+            from AppKit import NSScreen
+            screens = NSScreen.screens()
+            # y 좌표 반전 (AppKit 은 bottom-left 기준, tkinter 는 top-left)
+            main_height = NSScreen.mainScreen().frame().size.height
+            for s in screens:
+                f = s.frame()
+                sx = int(f.origin.x)
+                sw = int(f.size.width)
+                sy_top = int(main_height - (f.origin.y + f.size.height))
+                sh = int(f.size.height)
+                if sx <= x < sx + sw and sy_top <= y < sy_top + sh:
+                    return sx, sw
+            # 일치하는 모니터 없으면 첫 번째
+            f = screens[0].frame()
+            return int(f.origin.x), int(f.size.width)
+        except Exception:
+            return 0, self.root.winfo_screenwidth()
 
     def _on_alpha_change(self, value):
         try:
@@ -720,6 +811,11 @@ end tell
         self.holdings_data = load_json(HOLDINGS_PATH)
         self.holdings = self.holdings_data.get("holdings", [])
         self.peaks = load_json(PEAKS_PATH, default={})
+        # 리로드 시 수급·US 캐시도 강제 초기화
+        self.investor_cache.clear()
+        self.investor_cache_ts = 0
+        self.us_indices = []
+        self.us_indices_ts = 0
         self._sync_historical_peaks()
         self.refresh()
 
@@ -754,46 +850,93 @@ end tell
                 tk.Label(hdr, text=title, width=w, font=("SF Pro", 9, "bold"),
                          bg="#e8e8e8", fg="#222", anchor=anchor,
                          padx=3, pady=2).grid(row=0, column=col_idx, sticky="nsew")
-            # 각 행
+            # 각 행 — 영향에 따라 배경색 (긍정=연빨강, 부정=연파랑, 중립=흰색)
             for idx in indices:
-                row = tk.Frame(parent, bg="white")
+                impact = idx.get("impact", "")
+                if impact == "긍정":
+                    bg = "#fce8e6"    # 연한 빨강
+                elif impact == "부정":
+                    bg = "#e6ecf5"    # 연한 파랑
+                else:
+                    bg = "white"
+
+                row = tk.Frame(parent, bg=bg)
                 row.pack(fill=tk.X)
                 pct_color = sign_color(idx["pct"])
                 fut_color = sign_color(idx["fut_pct"]) if idx.get("fut_pct") is not None else "#999"
                 fut_txt = f"{idx['fut_pct']:+.2f}%" if idx.get("fut_pct") is not None else "-"
 
                 tk.Label(row, text=idx["name"], width=10, font=("SF Mono", 10),
-                         bg="white", fg="#222", anchor="w", padx=3, pady=1).grid(row=0, column=0, sticky="nsew")
+                         bg=bg, fg="#222", anchor="w", padx=3, pady=1).grid(row=0, column=0, sticky="nsew")
                 tk.Label(row, text=f"{idx['price']:,.2f}", width=9, font=("SF Mono", 10),
-                         bg="white", fg="#222", anchor="e", padx=3, pady=1).grid(row=0, column=1, sticky="nsew")
+                         bg=bg, fg="#222", anchor="e", padx=3, pady=1).grid(row=0, column=1, sticky="nsew")
                 tk.Label(row, text=f"{idx['pct']:+.2f}%", width=7, font=("SF Mono", 10),
-                         bg="white", fg=pct_color, anchor="e", padx=3, pady=1).grid(row=0, column=2, sticky="nsew")
+                         bg=bg, fg=pct_color, anchor="e", padx=3, pady=1).grid(row=0, column=2, sticky="nsew")
                 tk.Label(row, text=fut_txt, width=7, font=("SF Mono", 10),
-                         bg="white", fg=fut_color, anchor="e", padx=3, pady=1).grid(row=0, column=3, sticky="nsew")
-                # 설명 (작은 회색 글씨)
+                         bg=bg, fg=fut_color, anchor="e", padx=3, pady=1).grid(row=0, column=3, sticky="nsew")
                 tk.Label(row, text=idx.get("note", ""), width=28, font=("SF Pro", 9),
-                         bg="white", fg="#777", anchor="w",
+                         bg=bg, fg="#777", anchor="w",
                          padx=3, pady=1).grid(row=0, column=4, sticky="nsew")
 
-        # 좌/우 분할 컨테이너 (grid + sticky="n"으로 상단 정렬)
+        # 3등분 컨테이너: 선행 / (반도체+한국현재) / 매크로
         cols_wrap = tk.Frame(self.us_frame, bg="white")
         cols_wrap.pack(fill=tk.X)
-        cols_wrap.grid_columnconfigure(0, weight=1, uniform="col")
-        cols_wrap.grid_columnconfigure(2, weight=1, uniform="col")
+        for c in (0, 2, 4):
+            cols_wrap.grid_columnconfigure(c, weight=1, uniform="col")
 
-        left_col = tk.Frame(cols_wrap, bg="white")
-        left_col.grid(row=0, column=0, sticky="new", padx=(0, 4))
+        def _make_col(col_idx, section_title):
+            wrap = tk.Frame(cols_wrap, bg="white")
+            wrap.grid(row=0, column=col_idx, sticky="new", padx=3)
+            tk.Label(wrap, text=section_title,
+                     font=("SF Pro", 10, "bold"), bg="white", fg="#555",
+                     anchor="w", padx=2, pady=2).pack(fill=tk.X)
+            return wrap
 
-        separator = tk.Frame(cols_wrap, width=1, bg="#ddd")
-        separator.grid(row=0, column=1, sticky="ns")
+        # 왼쪽: 선행 지표
+        left_col = _make_col(0, "🌙 선행 지표")
+        tk.Frame(cols_wrap, width=1, bg="#ddd").grid(row=0, column=1, sticky="ns")
 
-        right_col = tk.Frame(cols_wrap, bg="white")
-        right_col.grid(row=0, column=2, sticky="new", padx=(4, 0))
+        # 가운데: 반도체 + 한국 현재 (상하 배치)
+        mid_wrap = tk.Frame(cols_wrap, bg="white")
+        mid_wrap.grid(row=0, column=2, sticky="new", padx=3)
+        tk.Label(mid_wrap, text="💾 반도체",
+                 font=("SF Pro", 10, "bold"), bg="white", fg="#555",
+                 anchor="w", padx=2, pady=2).pack(fill=tk.X)
+        mid_top = tk.Frame(mid_wrap, bg="white")
+        mid_top.pack(fill=tk.X)
+        # 한국 현재 서브섹션 (반도체 아래)
+        tk.Label(mid_wrap, text="🇰🇷 한국 현재",
+                 font=("SF Pro", 10, "bold"), bg="white", fg="#555",
+                 anchor="w", padx=2, pady=2).pack(fill=tk.X, pady=(8, 0))
+        mid_bottom = tk.Frame(mid_wrap, bg="white")
+        mid_bottom.pack(fill=tk.X)
+
+        tk.Frame(cols_wrap, width=1, bg="#ddd").grid(row=0, column=3, sticky="ns")
+
+        # 오른쪽: 매크로 + 한국 ADR (상하 배치)
+        macro_wrap = tk.Frame(cols_wrap, bg="white")
+        macro_wrap.grid(row=0, column=4, sticky="new", padx=3)
+        tk.Label(macro_wrap, text="🌍 매크로",
+                 font=("SF Pro", 10, "bold"), bg="white", fg="#555",
+                 anchor="w", padx=2, pady=2).pack(fill=tk.X)
+        macro_top = tk.Frame(macro_wrap, bg="white")
+        macro_top.pack(fill=tk.X)
+        tk.Label(macro_wrap, text="🇺🇸 한국 ADR",
+                 font=("SF Pro", 10, "bold"), bg="white", fg="#555",
+                 anchor="w", padx=2, pady=2).pack(fill=tk.X, pady=(8, 0))
+        macro_bottom = tk.Frame(macro_wrap, bg="white")
+        macro_bottom.pack(fill=tk.X)
 
         left = [x for x in self.us_indices if x.get("side") == "L"]
+        mid = [x for x in self.us_indices if x.get("side") == "M"]
         right = [x for x in self.us_indices if x.get("side") == "R"]
+        macro = [x for x in self.us_indices if x.get("side") == "MX"]
+        adr = [x for x in self.us_indices if x.get("side") == "ADR"]
         build_col(left_col, left)
-        build_col(right_col, right)
+        build_col(mid_top, mid)
+        build_col(mid_bottom, right)
+        build_col(macro_top, macro)
+        build_col(macro_bottom, adr)
 
     def _refresh_us_indices_if_needed(self):
         """미국 증시: 2분마다 실시간 갱신 (장 열림 시)"""
@@ -876,10 +1019,10 @@ end tell
             )
 
     def _refresh_investor_cache_if_needed(self):
-        """수급 데이터는 일일 단위라 10분에 1회만 갱신"""
+        """수급 데이터 갱신 — 2분 TTL (장중 값 변화 대응)"""
         import time as _t
         now = _t.time()
-        if now - self.investor_cache_ts < 600 and self.investor_cache:
+        if now - self.investor_cache_ts < 120 and self.investor_cache:
             return
         tickers = [s["ticker"] for s in self.holdings]
         with ThreadPoolExecutor(max_workers=min(len(tickers), 8)) as pool:
@@ -889,45 +1032,55 @@ end tell
                     self.investor_cache[t] = r
         self.investor_cache_ts = now
 
+    # 세부 투자자 컬럼 — 작고 연한 폰트로 표시
+    SUBTLE_KEYS = {"pension", "fin_inv", "trust", "pef",
+                   "insurance", "bank", "other_fin", "other_corp"}
+
     def _make_row(self, row_idx: int, ticker: str, cells: list,
                   row_bg: str = "white", parent=None, parent_r=None):
-        """
-        한 행을 왼쪽(고정) + 오른쪽(스크롤) 프레임에 나누어 생성
-        parent / parent_r: 좌/우 부모 프레임
-        """
-        left_target = parent if parent is not None else self.rows_frame
-        right_target = parent_r if parent_r is not None else getattr(self, "rows_frame_r", None)
-
-        left_keys = [c[0] for c in self.COLS_LEFT]
-        right_keys = [c[0] for c in self.COLS_RIGHT]
+        """한 행 생성 (고정 width로 헤더와 정렬 맞춤)"""
         all_keys = [c[0] for c in self.COLS]
         cell_by_key = dict(zip(all_keys, cells))
 
-        def _paint(target, keys, cols_info):
+        def _paint(target, cols_info):
             if target is None:
                 return
             frame = tk.Frame(target, bg=row_bg)
             frame.grid(row=row_idx, column=0, sticky="ew")
             target.grid_columnconfigure(0, weight=1)
-            for col_idx, ((key, title, width, align)) in enumerate(cols_info):
+            for col_idx, (key, title, pw, align) in enumerate(cols_info):
                 cell = cell_by_key.get(key, ("", "#555"))
                 text = cell[0]
                 fg = cell[1]
                 cell_bg = cell[2] if len(cell) > 2 and cell[2] else row_bg
                 cell_bold = cell[3] if len(cell) > 3 else False
                 anchor = {"w": "w", "e": "e", "center": "center"}[align]
-                font_style = ("SF Mono", 10, "bold") if cell_bold else ("SF Mono", 10)
+                if cell_bold:
+                    font_style = ("SF Mono", 10, "bold")
+                else:
+                    font_style = ("SF Mono", 10)
+                # 세부 투자자 컬럼 — 색상 연하게 (채도 낮춤)
+                if key in self.SUBTLE_KEYS and not cell_bold:
+                    # 기존 fg가 기본 컬러면 회색 + 부호 컬러는 살짝 연하게
+                    if fg == "#c0392b":
+                        fg = "#d06b5f"
+                    elif fg == "#1f4e8f":
+                        fg = "#5a7ca8"
                 lbl = tk.Label(
-                    frame, text=text, width=max(5, width // 8),
+                    frame, text=text, width=max(5, pw // 8),
                     font=font_style, bg=cell_bg, fg=fg,
                     anchor=anchor, padx=2, pady=1,
+                    borderwidth=0,
                 )
                 lbl.grid(row=0, column=col_idx, sticky="nsew")
                 lbl.bind("<Button-1>", lambda e, t=ticker: self._on_row_click(t))
                 lbl.bind("<Double-1>", lambda e, t=ticker: self._on_row_double_click(t))
 
-        _paint(left_target, left_keys, self.COLS_LEFT)
-        _paint(right_target, right_keys, self.COLS_RIGHT)
+        left_target = parent if parent is not None else self.rows_frame
+        # parent_r=None 은 "우측 영역 렌더 금지" (퇴직연금) — fallback 금지
+        right_target = parent_r
+        _paint(left_target, self.COLS_LEFT)
+        _paint(right_target, self.COLS_RIGHT)
 
     def refresh(self):
         # 중복 갱신 방지: 기존 refresh / countdown 예약 취소
@@ -996,7 +1149,8 @@ end tell
         for stock in self.holdings:
             is_pension = stock.get("account") == "퇴직연금"
             parent = self.pension_rows_frame if is_pension else self.rows_frame
-            parent_r = self.pension_rows_frame_r if is_pension else self.rows_frame_r
+            # 퇴직연금은 외국인/기관 등 우측 투자자 정보 생략
+            parent_r = None if is_pension else self.rows_frame_r
             if is_pension:
                 row_idx = pension_idx
                 pension_idx += 1
@@ -1023,15 +1177,16 @@ end tell
             inst = flow.get("기관", 0) if flow else 0
 
             indiv_cell = (format_signed(indiv), sign_color(indiv)) if flow else ("-", "#999")
-            # 외국인: 순매수량 + 보유율(%)
+            # 외국인: 순매수량 / 보유율(%) 분리
             if flow:
                 foreign_ratio = flow.get("외국인비율", 0)
-                foreign_text = format_signed(foreign)
-                if foreign_ratio > 0:
-                    foreign_text = f"{format_signed(foreign)} ({foreign_ratio:.2f}%)"
-                foreign_cell = (foreign_text, sign_color(foreign))
+                foreign_amt_cell = (format_signed(foreign), sign_color(foreign))
+                ratio_text = f"({foreign_ratio:.2f}%)" if foreign_ratio > 0 else ""
+                # %는 연한 회색 (방향성 없는 단순 비율)
+                foreign_pct_cell = (ratio_text, "#888")
             else:
-                foreign_cell = ("-", "#999")
+                foreign_amt_cell = ("-", "#999")
+                foreign_pct_cell = ("", "#999")
             inst_cell = (format_signed(inst), sign_color(inst)) if flow else ("-", "#999")
 
             def _icell(key):
@@ -1050,16 +1205,19 @@ end tell
             if current_price is None:
                 fail_map = {
                     "name": (name, "#333"),
-                    "day_chg": ("-", "#999"),
+                    "day_chg_amt": ("-", "#999"),
+                    "day_chg_pct": ("", "#999"),
                     "shares": (str(shares), "#333"),
                     "buy": (f"{buy_price:,}", "#333"),
                     "cur": ("-", "#999"),
-                    "pnl": ("-", "#999"),
-                    "peak": ("-", "#999"),
-                    "from_peak": ("-", "#999"),
-                    "pnl_amt": ("-", "#999"),
+                    "peak_money": ("-", "#999"),
+                    "peak_pct": ("", "#999"),
+                    "pnl_amt_money": ("-", "#999"),
+                    "pnl_amt_pct": ("", "#999"),
                     "volume": ("-", "#999"),
-                    "foreign": foreign_cell,
+                    "indiv": indiv_cell,
+                    "foreign_amt": foreign_amt_cell,
+                    "foreign_pct": foreign_pct_cell,
                     "inst": inst_cell,
                     "pension": pension_cell,
                     "fin_inv": fin_inv_cell,
@@ -1147,53 +1305,74 @@ end tell
             elif is_peak_drop:
                 name_cell = (name_display, "white", "#4a90c2", True)  # 하락 → 파랑
 
+            # 연한색 매핑 (부호 방향에 따라) — 먼저 정의 (뒤 로직에서 사용)
+            def _light_color(n):
+                if n > 0:
+                    return "#d06b5f"
+                if n < 0:
+                    return "#5a7ca8"
+                return "#888"
+
             # 현재가 / 손익% — 셀 분리 (각자 우측 정렬)
             cur_cell = (f"{current_price:,}", sign_color(pnl_pct))
-            pnl_cell = (f"{pnl_pct:+.2f}%", sign_color(pnl_pct))
+            pnl_cell = (f"{pnl_pct:+.2f}%", sign_color(pnl_pct))  # legacy (미사용)
 
-            # 피크가 / 피크대비 — 실제 고점이 있어야만 표시
-            # (현재가 == 피크가이거나, 피크가 <= 매수가면 의미 없음)
+            # 피크가(금액)/피크대비(%) — 손익금액 패턴과 동일
             if peak_price == current_price or peak_price <= buy_price:
-                peak_main_cell = ("", "#222")
-                from_peak_cell = ("", "#222")
+                peak_money_cell = ("", "#222")
+                peak_pct_cell = ("", "#222")
             else:
-                peak_main_cell = (f"{peak_price:,}", "#c0392b")
-                from_peak_cell = (f"{from_peak_pct:+.2f}%", sign_color(from_peak_pct))
+                peak_money_cell = (f"{peak_price:,}", "#c0392b")
+                peak_pct_cell = (f"({from_peak_pct:+.2f}%)", _light_color(from_peak_pct))
 
-            # 위험 뱃지: % 셀에만 적용 (금액은 색상만)
+            # 위험 뱃지: 손절 시
             if is_stop:
                 pnl_cell = (f"{pnl_pct:+.2f}%", "white", "#1f4e8f", True)
+            # 피크 하락 뱃지: 금액+% 양쪽 모두
             if is_peak_drop and peak_price > buy_price and peak_price != current_price:
-                # 수익 중이면 익절 경고(빨강), 손실 중이면 추가 하락(파랑)
                 peak_bg = "#c0392b" if pnl_pct > 0 else "#4a90c2"
-                from_peak_cell = (f"{from_peak_pct:+.2f}%", "white", peak_bg, True)
+                peak_money_cell = (f"{peak_price:,}", "white", peak_bg, True)
+                peak_pct_cell = (f"({from_peak_pct:+.2f}%)", "white", peak_bg, True)
 
             volume = volumes.get(ticker, 0)
             base_price = bases.get(ticker, 0)
             volume_cell = (format_volume(volume), "#555")
 
-            # 전일 종가 대비 가격 변동: +350 (+1.31%)
+            # 전일 종가 대비: 금액/% 분리 (%는 연한색)
             if base_price > 0:
                 price_diff = current_price - base_price
                 price_pct = (price_diff / base_price) * 100
-                diff_text = f"{price_diff:+,} ({price_pct:+.2f}%)" if price_diff != 0 else "0"
-                vol_diff_cell = (diff_text, sign_color(price_diff))
+                day_chg_amt_cell = (format_signed(price_diff) if price_diff else "0", sign_color(price_diff))
+                day_chg_pct_cell = (f"({price_pct:+.2f}%)" if price_diff else "", _light_color(price_diff))
             else:
-                vol_diff_cell = ("-", "#999")
+                day_chg_amt_cell = ("-", "#999")
+                day_chg_pct_cell = ("", "#999")
+
+            # 손익금액/% 분리 (%는 연한색)
+            pnl_amt_money_cell = (format_signed(pnl_amount) if pnl_amount else "0", sign_color(pnl_amount))
+            pnl_amt_pct_cell = (f"({pnl_pct:+.2f}%)", _light_color(pnl_amount))
+            # 손절 뱃지 적용 (금액+% 양쪽 모두)
+            if is_stop:
+                pnl_amt_money_cell = (format_signed(pnl_amount) if pnl_amount else "0",
+                                       "white", "#1f4e8f", True)
+                pnl_amt_pct_cell = (f"({pnl_pct:+.2f}%)", "white", "#1f4e8f", True)
 
             # 전체 키-셀 매핑
             cell_by_key = {
                 "name": name_cell,
-                "day_chg": vol_diff_cell,
+                "day_chg_amt": day_chg_amt_cell,
+                "day_chg_pct": day_chg_pct_cell,
                 "shares": (str(shares), "#222"),
                 "buy": (f"{buy_price:,}", "#222"),
                 "cur": cur_cell,
-                "pnl": pnl_cell,
-                "peak": peak_main_cell,
-                "from_peak": from_peak_cell,
-                "pnl_amt": (format_signed(pnl_amount) if pnl_amount else "0", sign_color(pnl_amount)),
+                "peak_money": peak_money_cell,
+                "peak_pct": peak_pct_cell,
+                "pnl_amt_money": pnl_amt_money_cell,
+                "pnl_amt_pct": pnl_amt_pct_cell,
                 "volume": volume_cell,
-                "foreign": foreign_cell,
+                "indiv": indiv_cell,
+                "foreign_amt": foreign_amt_cell,
+                "foreign_pct": foreign_pct_cell,
                 "inst": inst_cell,
                 "pension": pension_cell,
                 "fin_inv": fin_inv_cell,
@@ -1214,16 +1393,22 @@ end tell
             pnl = current - invested
             tm = {
                 "name": ("합계", "#222"),
-                "day_chg": ("", "#555"),
+                "day_chg_amt": ("", "#555"),
+                "day_chg_pct": ("", "#555"),
                 "shares": (f"{shares_sum}주", "#222"),
                 "buy": (f"{invested:,}", "#222"),
                 "cur": (f"{current:,}", sign_color(pnl)),
-                "pnl": ("", "#555"),
-                "peak": ("", "#555"),
-                "from_peak": ("", "#555"),
-                "pnl_amt": (format_signed(pnl) if pnl else "0", sign_color(pnl)),
+                "peak_money": ("", "#555"),
+                "peak_pct": ("", "#555"),
+                "pnl_amt_money": (format_signed(pnl) if pnl else "0", sign_color(pnl)),
+                "pnl_amt_pct": (
+                    f"({(pnl/invested*100 if invested else 0):+.2f}%)",
+                    "#d06b5f" if pnl > 0 else ("#5a7ca8" if pnl < 0 else "#888")
+                ),
                 "volume": ("", "#555"),
-                "foreign": ("", "#555"),
+                "indiv": ("", "#555"),
+                "foreign_amt": ("", "#555"),
+                "foreign_pct": ("", "#555"),
                 "inst": ("", "#555"),
                 "pension": ("", "#555"),
                 "fin_inv": ("", "#555"),
@@ -1239,13 +1424,14 @@ end tell
                     return
                 tr = tk.Frame(target, bg="#f5f5f5")
                 tr.grid(row=row_idx, column=0, sticky="ew")
-                for col_idx, (key, title, width, align) in enumerate(cols):
+                for col_idx, (key, title, pw, align) in enumerate(cols):
                     text, fg = tm[key]
                     anchor = {"w": "w", "e": "e", "center": "center"}[align]
                     tk.Label(
-                        tr, text=text, width=max(5, width // 8),
+                        tr, text=text, width=max(5, pw // 8),
                         font=("SF Mono", 10, "bold"), bg="#f5f5f5", fg=fg,
                         anchor=anchor, padx=2, pady=2,
+                        borderwidth=0,
                     ).grid(row=0, column=col_idx, sticky="nsew")
             _paint(parent_frame_left, self.COLS_LEFT)
             _paint(parent_frame_right, self.COLS_RIGHT)
@@ -1254,9 +1440,9 @@ end tell
         if main_idx > 0:
             _append_total(self.rows_frame, self.rows_frame_r,
                           main_idx, main_invested, main_current, main_shares)
-        # 퇴직연금 합계
+        # 퇴직연금 합계 (우측 투자자 정보 없음)
         if pension_idx > 0:
-            _append_total(self.pension_rows_frame, self.pension_rows_frame_r,
+            _append_total(self.pension_rows_frame, None,
                           pension_idx, pension_invested, pension_current, pension_shares)
 
         self.last_refresh_time = datetime.now().strftime("%H:%M:%S")
