@@ -8,7 +8,7 @@
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
-        <string>/Users/jwhan-macbook/Repository/github-self/jusic/portfolio/run.sh</string>
+        <string>/Users/jwhan-macbook/Repository/github-self/portfolio/run.sh</string>
     </array>
 
     <key>RunAtLoad</key>
@@ -18,9 +18,9 @@
     <false/>
 
     <key>StandardOutPath</key>
-    <string>/Users/jwhan-macbook/Repository/github-self/jusic/portfolio/data/launcher.log</string>
+    <string>/Users/jwhan-macbook/Repository/github-self/portfolio/data/launcher.log</string>
 
     <key>StandardErrorPath</key>
-    <string>/Users/jwhan-macbook/Repository/github-self/jusic/portfolio/data/launcher.err</string>
+    <string>/Users/jwhan-macbook/Repository/github-self/portfolio/data/launcher.err</string>
 </dict>
 </plist>
