@@ -1,0 +1,22 @@
+{
+  "updated_at": "YYYY-MM-DD",
+  "holdings": [
+    {
+      "ticker": "005930",
+      "name": "삼성전자",
+      "shares": 10,
+      "avg_price": 70000,
+      "buy_date": "20260101",
+      "market": "KOSPI"
+    },
+    {
+      "ticker": "069500",
+      "name": "KODEX 200",
+      "shares": 100,
+      "avg_price": 93000,
+      "buy_date": "20260101",
+      "market": "KOSPI",
+      "account": "퇴직연금"
+    }
+  ]
+}

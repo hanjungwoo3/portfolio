@@ -1,0 +1,9 @@
+venv/
+__pycache__/
+*.pyc
+.DS_Store
+
+# Runtime data (유저 보유 정보는 민감)
+data/holdings.json
+data/peaks.json
+data/alerts/*.json

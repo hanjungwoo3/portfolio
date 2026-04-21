@@ -1,0 +1,18 @@
+{
+  "stop_loss_alert_pct": -9.0,
+  "trailing_stop_alert_pct": -9.0,
+  "polling_interval_seconds": 5,
+  "alert_cooldown_minutes": 15,
+  "persistent_alert": true,
+  "sell_fee_pct": 0.2,
+  "us_indices": [
+    {"symbol": "^IXIC", "name": "나스닥"},
+    {"symbol": "^GSPC", "name": "S&P 500"},
+    {"symbol": "^DJI",  "name": "다우존스"},
+    {"symbol": "^SOX",  "name": "필라델피아반도체"},
+    {"symbol": "SOXX",  "name": "SOXX ETF"},
+    {"symbol": "SOXL",  "name": "SOXL (반도체 3x)"},
+    {"symbol": "DX-Y.NYB", "name": "달러인덱스"},
+    {"symbol": "CL=F",  "name": "WTI 원유"}
+  ]
+}
