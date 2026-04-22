@@ -17,6 +17,15 @@ from pathlib import Path
 import rumps
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+
+
+def _hide_dock_icon():
+    """Dock 아이콘 숨김 — 메뉴바 아이콘만 노출 (NSApplicationActivationPolicyAccessory=1)"""
+    try:
+        from AppKit import NSApplication
+        NSApplication.sharedApplication().setActivationPolicy_(1)
+    except Exception:
+        pass
 WINDOW_SCRIPT = SCRIPT_DIR / "portfolio_window.py"
 VENV_PYTHON = SCRIPT_DIR / "venv" / "bin" / "python3"
 # venv가 없으면 시스템 python3 사용
@@ -61,7 +70,17 @@ class LauncherApp(rumps.App):
 
     def close_window(self, _sender):
         if self._is_running():
+            # 1) SIGTERM 전송 → window 가 _on_quit 으로 자진 종료
             self.window_proc.terminate()
+            try:
+                self.window_proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                # 2) 응답 없으면 강제 종료
+                self.window_proc.kill()
+                try:
+                    self.window_proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    pass
             self.window_proc = None
         else:
             rumps.notification(
@@ -72,4 +91,5 @@ class LauncherApp(rumps.App):
 
 
 if __name__ == "__main__":
+    _hide_dock_icon()
     LauncherApp().run()

@@ -57,10 +57,57 @@ def _parse_number(s: str) -> int:
         return 0
 
 
+def fetch_target_consensus(ticker: str) -> dict | None:
+    """네이버 금융에서 애널리스트 목표주가 / 투자의견 스크래핑
+    Returns: {'target': int, 'opinion': str, 'score': float} or None
+    """
+    try:
+        r = requests.get(
+            f"https://finance.naver.com/item/main.naver?code={ticker}",
+            headers={"User-Agent": USER_AGENT}, timeout=5,
+        )
+        soup = BeautifulSoup(r.text, "html.parser")
+        th = soup.find(lambda t: t.name == "th" and "목표주가" in t.get_text())
+        if not th:
+            return None
+        td = th.find_next_sibling("td")
+        if not td:
+            return None
+        # 투자의견: span.f_up/f_down 안의 [점수 em] + 텍스트
+        score = None
+        opinion = ""
+        # BeautifulSoup: multi-valued class 를 개별 문자열로 전달하므로 string 비교
+        span = td.find("span", class_=lambda c: bool(c) and c.startswith("f_"))
+        if span:
+            em = span.find("em")
+            em_text = em.get_text(strip=True) if em else ""
+            try:
+                score = float(em_text) if em_text else None
+            except ValueError:
+                score = None
+            full = span.get_text(strip=True)
+            opinion = full.replace(em_text, "").strip() if em_text else full
+        # 목표주가: td 바로 아래 em (span 내부 제외)
+        target = None
+        for em in td.find_all("em"):
+            if em.find_parent("span"):
+                continue
+            val = em.get_text(strip=True).replace(",", "")
+            if val.isdigit():
+                target = int(val)
+                break
+        if target is None and not opinion:
+            return None
+        return {"target": target, "opinion": opinion, "score": score}
+    except Exception:
+        return None
+
+
 def fetch_investor_flow(ticker: str) -> dict | None:
     """
     토스증권 공개 API에서 최근 일자 개인/외국인/기관 순매수 조회
     토스 앱과 완전히 동일한 숫자 (외국인 = 순수 외국인, 기타외국인은 개인에 포함)
+    항상 body[0] (가장 최신 날짜) 값 반환 — 0이어도 어제로 폴백하지 않음
     """
     try:
         url = (
@@ -76,28 +123,22 @@ def fetch_investor_flow(ticker: str) -> dict | None:
         body = data.get("result", {}).get("body", [])
         if not body:
             return None
-        # 최신 데이터부터 확인, 3종 모두 0이면 그 전날 것 사용
-        for item in body:
-            indiv = int(item.get("netIndividualsBuyVolume", 0))
-            foreign = int(item.get("netForeignerBuyVolume", 0))
-            inst = int(item.get("netInstitutionBuyVolume", 0))
-            if indiv != 0 or foreign != 0 or inst != 0:
-                return {
-                    "date": item.get("baseDate", ""),
-                    "개인": indiv,
-                    "외국인": foreign,
-                    "기관": inst,
-                    "연기금": int(item.get("netPensionFundBuyVolume", 0)),
-                    "금융투자": int(item.get("netFinancialInvestmentBuyVolume", 0)),
-                    "투신": int(item.get("netTrustBuyVolume", 0)),
-                    "사모": int(item.get("netPrivateEquityFundBuyVolume", 0)),
-                    "보험": int(item.get("netInsuranceBuyVolume", 0)),
-                    "은행": int(item.get("netBankBuyVolume", 0)),
-                    "기타금융": int(item.get("netOtherFinancialInstitutionsBuyVolume", 0)),
-                    "기타법인": int(item.get("netOtherCorporationBuyVolume", 0)),
-                    "외국인비율": float(item.get("foreignerRatio") or 0),
-                }
-        return None
+        item = body[0]
+        return {
+            "date": item.get("baseDate", ""),
+            "개인": int(item.get("netIndividualsBuyVolume", 0)),
+            "외국인": int(item.get("netForeignerBuyVolume", 0)),
+            "기관": int(item.get("netInstitutionBuyVolume", 0)),
+            "연기금": int(item.get("netPensionFundBuyVolume", 0)),
+            "금융투자": int(item.get("netFinancialInvestmentBuyVolume", 0)),
+            "투신": int(item.get("netTrustBuyVolume", 0)),
+            "사모": int(item.get("netPrivateEquityFundBuyVolume", 0)),
+            "보험": int(item.get("netInsuranceBuyVolume", 0)),
+            "은행": int(item.get("netBankBuyVolume", 0)),
+            "기타금융": int(item.get("netOtherFinancialInstitutionsBuyVolume", 0)),
+            "기타법인": int(item.get("netOtherCorporationBuyVolume", 0)),
+            "외국인비율": float(item.get("foreignerRatio") or 0),
+        }
     except Exception as e:
         print(f"[WARN] 수급 조회 실패 {ticker}: {e}")
     return None
@@ -200,18 +241,32 @@ def fetch_us_indices_with_futures() -> list:
         return v is not None and not math.isnan(float(v)) and float(v) != 0
 
     def _fast_quote(symbol):
-        """fast_info로 실시간 가격 + 전일 종가 조회. NaN/0 나오면 history 폴백"""
+        """현재가 + 전일 종가 조회.
+        선물(CL=F 등) 은 fast_info.regular_market_previous_close 가 Yahoo 웹과 어긋나므로
+        info.regularMarketPreviousClose 를 우선 사용.
+        """
+        tk = yf.Ticker(symbol)
+        # 1) info 우선 (Yahoo 웹과 일치)
         try:
-            fi = yf.Ticker(symbol).fast_info
+            info = tk.info
+            last = info.get("regularMarketPrice")
+            prev = info.get("regularMarketPreviousClose")
+            if _is_valid(last) and _is_valid(prev):
+                return float(last), float(prev)
+        except Exception:
+            pass
+        # 2) fast_info 폴백
+        try:
+            fi = tk.fast_info
             last = fi.last_price
             prev = fi.regular_market_previous_close
             if _is_valid(last) and _is_valid(prev):
                 return float(last), float(prev)
         except Exception:
             pass
-        # 폴백: history로 2일치
+        # 3) history 폴백
         try:
-            h = yf.Ticker(symbol).history(period="5d", auto_adjust=False)
+            h = tk.history(period="5d", auto_adjust=False)
             if not h.empty and len(h) >= 2:
                 c1 = float(h["Close"].iloc[-1])
                 c2 = float(h["Close"].iloc[-2])
@@ -240,21 +295,36 @@ def fetch_us_indices_with_futures() -> list:
             return ("+", "#c0392b", "긍정")
         return ("-", "#1f4e8f", "부정")
 
+    # 병렬 조회 — 각 심볼 ~0.4s 소요, 30개 직렬 시 13s → ThreadPool 로 단축
+    symbols: list = []
+    seen: set = set()
+    for cash, _, _, fut, _, _ in pairs:
+        for s in (cash, fut):
+            if s and s not in seen:
+                seen.add(s)
+                symbols.append(s)
+    quotes: dict = {}
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        for sym, res in zip(symbols, pool.map(_fast_quote, symbols)):
+            quotes[sym] = res
+
     out = []
     for cash, name, note, fut, side, direction in pairs:
-        close, prev = _fast_quote(cash)
+        close, prev = quotes.get(cash, (None, None))
         if close is None:
             continue
         pct = (close - prev) / prev * 100 if prev else 0
 
         fut_pct = None
         if fut:
-            fclose, fprev = _fast_quote(fut)
+            fclose, fprev = quotes.get(fut, (None, None))
             if fclose is not None and fprev:
                 fut_pct = (fclose - fprev) / fprev * 100
 
         icon, icon_color, impact_text = _impact(pct, fut_pct, direction)
         out.append({
+            "symbol": cash,
+            "fut_symbol": fut,
             "name": name, "note": note, "price": close, "pct": pct,
             "fut_pct": fut_pct, "side": side,
             "impact": impact_text, "icon": icon, "icon_color": icon_color,
@@ -262,18 +332,79 @@ def fetch_us_indices_with_futures() -> list:
     return out
 
 
-def fetch_nxt_support(ticker: str) -> bool:
-    """토스 API로 NXT(시간외) 거래 지원 여부 조회"""
+def resolve_us_indicator_url(symbol: str) -> str:
+    """미국 증시 지표 심볼 → 외부 링크 URL
+    - Yahoo(`^`)/환율·선물(`=`)/암호화폐(`-`)·DX-Y.NYB 계열: Yahoo Finance
+    - KOSPI/KOSDAQ 개별 종목(`.KS`): tossinvest 한국 페이지
+    - 그 외 순수 미국 티커(PKX/NVDA/EWY 등): tossinvest 미국 페이지
+    """
+    if not symbol:
+        return "https://finance.yahoo.com/"
+    if symbol.endswith(".KS"):
+        code = symbol.rsplit(".", 1)[0]
+        return f"https://tossinvest.com/stocks/A{code}"
+    if symbol.startswith("^") or "=" in symbol or symbol == "DX-Y.NYB" or "-" in symbol:
+        return f"https://finance.yahoo.com/quote/{symbol}"
+    return f"https://tossinvest.com/stocks/{symbol}"
+
+
+def kr_session_phase() -> str:
+    """KR 시장의 현재 세션 구분 ('REGULAR'|'EXTENDED'|'CLOSED')
+    - REGULAR: 09:00-15:30 (모든 종목)
+    - EXTENDED: 08:00-09:00 / 15:40-20:00 (NXT 지원 종목만 실제 거래)
+    """
     try:
-        url = f"https://wts-info-api.tossinvest.com/api/v1/stock-detail/ui/A{ticker}/common"
-        resp = requests.get(url, headers={
-            "User-Agent": USER_AGENT,
-            "Origin": "https://tossinvest.com",
-            "Referer": "https://tossinvest.com/",
-        }, timeout=5)
-        return bool(resp.json().get("result", {}).get("nxtSupported", False))
+        from zoneinfo import ZoneInfo
+        now = datetime.now(ZoneInfo("Asia/Seoul"))
+        if now.weekday() >= 5:
+            return "CLOSED"
+        hhmm = now.hour * 60 + now.minute
+        if 9 * 60 <= hhmm < 15 * 60 + 30:
+            return "REGULAR"
+        if (8 * 60 <= hhmm < 9 * 60) or (15 * 60 + 40 <= hhmm < 20 * 60):
+            return "EXTENDED"
+        return "CLOSED"
     except Exception:
-        return False
+        return "REGULAR"
+
+
+def is_market_open(market_key: str) -> bool:
+    """지수/ETF 용 거래 가능 시간 (개별 종목 NXT 판정은 별도)
+    - KR: 09:00-15:30 정규장만
+    - US: 04:00-20:00 ET (프리+정규+애프터)
+    - JP: 08:30-15:30
+    """
+    try:
+        from zoneinfo import ZoneInfo
+        tz_map = {"KR": "Asia/Seoul", "US": "America/New_York", "JP": "Asia/Tokyo"}
+        tz = tz_map.get(market_key)
+        if not tz:
+            return True
+        now = datetime.now(ZoneInfo(tz))
+        if now.weekday() >= 5:
+            return False
+        hhmm = now.hour * 60 + now.minute
+        if market_key == "KR":
+            return 9 * 60 <= hhmm < 15 * 60 + 30
+        if market_key == "JP":
+            return 8 * 60 + 30 <= hhmm < 15 * 60 + 30
+        return 4 * 60 <= hhmm < 20 * 60
+    except Exception:
+        return True
+
+
+def market_of_symbol(symbol: str) -> str:
+    """yfinance 심볼 → 'KR' | 'US' | 'JP' | 'OTHER' (24h 자산)"""
+    if not symbol:
+        return "OTHER"
+    if symbol.endswith(".KS") or symbol in ("^KS200", "^KQ11"):
+        return "KR"
+    if symbol == "^N225":
+        return "JP"
+    # 환율/선물/암호화폐/달러인덱스 = OTHER (24h에 가까움)
+    if "=" in symbol or symbol == "DX-Y.NYB" or "-" in symbol:
+        return "OTHER"
+    return "US"
 
 
 def fetch_peak_since_buy(ticker: str, buy_date: str) -> int | None:
@@ -312,7 +443,7 @@ def fetch_peak_since_buy(ticker: str, buy_date: str) -> int | None:
 def fetch_toss_prices_batch(tickers: list) -> dict:
     """
     토스 공개 API로 여러 종목 현재가 + 거래량 한 번에 조회
-    Returns: {ticker: {"price": int, "volume": int}, ...}
+    Returns: {ticker: {"price": int, "volume": int, "base": int, "trade_date": "YYYY-MM-DD" KST}, ...}
     """
     if not tickers:
         return {}
@@ -334,11 +465,23 @@ def fetch_toss_prices_batch(tickers: list) -> dict:
             close = item.get("close")
             volume = item.get("volume", 0)
             base = item.get("base", 0)  # 전일 종가
+            # 마지막 체결 시각 (KST 날짜) — 오늘 거래 여부 판정용
+            trade_date = ""
+            raw_dt = item.get("tradeDateTime", "")
+            if raw_dt:
+                try:
+                    from zoneinfo import ZoneInfo
+                    dt_utc = datetime.fromisoformat(raw_dt.replace("Z", "+00:00"))
+                    trade_date = dt_utc.astimezone(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d")
+                except Exception:
+                    pass
             if code and close is not None:
                 result[code] = {
                     "price": int(close),
                     "volume": int(volume),
-                    "base": int(base),  # 전일 종가
+                    "base": int(base),
+                    "trade_date": trade_date,
+                    "open": int(item.get("open") or 0),
                 }
         return result
     except Exception as e:
@@ -378,6 +521,9 @@ class PortfolioWindow:
         ("shares", "수량", 40, "e"),
         ("buy", "매수가", 95, "e"),
         ("cur", "현재가", 95, "e"),
+        ("target_money", "목표주가", 75, "e"),
+        ("target_pct", "", 60, "w"),
+        ("opinion", "투자의견", 55, "center"),
         ("pnl_amt_money", "손익금액", 75, "e"),
         ("pnl_amt_pct", "", 70, "w"),
         ("day_chg_amt", "전일대비", 60, "e"),
@@ -405,7 +551,8 @@ class PortfolioWindow:
 
     # 외국인 이전까지는 왼쪽 고정, 이후는 오른쪽 스크롤
     FROZEN_KEYS = {"name", "day_chg_amt", "day_chg_pct", "volume", "shares",
-                   "buy", "cur", "pnl_amt_money", "pnl_amt_pct",
+                   "buy", "cur", "target_money", "target_pct", "opinion",
+                   "pnl_amt_money", "pnl_amt_pct",
                    "peak_money", "peak_pct"}
 
     @property
@@ -424,7 +571,8 @@ class PortfolioWindow:
         self.cooldowns = {}
         self.investor_cache = {}  # {ticker: {"date": ..., "기관": ..., "외국인": ..., "개인": ...}}
         self.investor_cache_ts = 0  # 마지막 수급 조회 시각
-        self.nxt_cache = {}  # {ticker: bool} NXT 지원 여부 (앱 시작 시 1회)
+        self.consensus_cache = {}  # {ticker: {"target": int, "opinion": str, "score": float}}
+        self.consensus_cache_ts = 0  # 마지막 애널리스트 컨센서스 조회 시각
         self.us_indices = []  # 미국 증시 데이터
         self.us_indices_ts = 0  # 마지막 조회 시각
         self.compact_mode = False  # 간략히 보기 모드
@@ -445,15 +593,29 @@ class PortfolioWindow:
         self.root.attributes("-alpha", 1.0)     # 기본 불투명
         self.root.geometry("1080x480+50+50")
 
+        # Dock 아이콘 숨김 — 메뉴바 런처만 노출 (NSApplicationActivationPolicyAccessory=1)
+        try:
+            from AppKit import NSApplication
+            NSApplication.sharedApplication().setActivationPolicy_(1)
+        except Exception:
+            pass
+
         # 티커 → row_id 매핑 (클릭 시 토스 페이지 이동용)
         self._row_ticker = {}
+
+        # 창 종료 버튼(X) / 런처의 terminate(SIGTERM) → 깔끔하게 프로세스 종료
+        self.root.protocol("WM_DELETE_WINDOW", self._on_quit)
+        import signal as _sig
+        try:
+            _sig.signal(_sig.SIGTERM, lambda *_: self._on_quit())
+        except Exception:
+            pass
 
         self._build_ui()
         self.interval_ms = self.config.get("polling_interval_seconds", 5) * 1000
 
-        # 앱 시작 시 역사적 피크 + NXT 지원 여부 + 미국 증시 동기화
+        # 앱 시작 시 역사적 피크 + 미국 증시 동기화
         self._sync_historical_peaks()
-        self._sync_nxt_support()
         self._refresh_us_indices_if_needed()
         self.refresh()
         # 초기 내용에 맞춰 크기 조정
@@ -530,8 +692,37 @@ class PortfolioWindow:
             self._canvases.append(canvas)
             return left_hdr, left_rows, right_hdr, right_rows
 
+        # 3개 테이블을 감싸는 세로 스크롤 영역 (보유종목 + 관심 + 퇴직연금)
+        self.tables_scroll_wrap = tk.Frame(self.root, bg="white")
+        self.tables_scroll_wrap.pack(fill=tk.BOTH, expand=True)
+        self.tables_canvas = tk.Canvas(self.tables_scroll_wrap, bg="white",
+                                       highlightthickness=0)
+        self.tables_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        _yscroll = ttk.Scrollbar(self.tables_scroll_wrap, orient="vertical",
+                                 command=self.tables_canvas.yview)
+        _yscroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.tables_canvas.configure(yscrollcommand=_yscroll.set)
+        self.tables_inner = tk.Frame(self.tables_canvas, bg="white")
+        self._tables_inner_id = self.tables_canvas.create_window(
+            (0, 0), window=self.tables_inner, anchor="nw"
+        )
+
+        def _on_tables_resize(e=None):
+            self.tables_canvas.configure(scrollregion=self.tables_canvas.bbox("all"))
+        self.tables_inner.bind("<Configure>", _on_tables_resize)
+
+        def _on_canvas_resize(e):
+            # 내부 프레임 폭을 캔버스 폭에 맞춤
+            self.tables_canvas.itemconfigure(self._tables_inner_id, width=e.width)
+        self.tables_canvas.bind("<Configure>", _on_canvas_resize)
+
+        # 마우스 휠로 세로 스크롤
+        def _on_mousewheel(event):
+            self.tables_canvas.yview_scroll(int(-1 * event.delta), "units")
+        self.tables_canvas.bind_all("<MouseWheel>", _on_mousewheel)
+
         # 메인 보유종목 테이블
-        self.table_container = tk.Frame(self.root, bg="white")
+        self.table_container = tk.Frame(self.tables_inner, bg="white")
         self.table_container.pack(fill=tk.X)
         (self.header_frame, self.rows_frame,
          self.header_frame_r, self.rows_frame_r) = _split_table(
@@ -539,8 +730,16 @@ class PortfolioWindow:
         )
         self._render_header()
 
+        # 관심 주식 테이블 (보유종목 아래, 퇴직연금 위)
+        self.watchlist_container = tk.Frame(self.tables_inner, bg="white")
+        self.watchlist_container.pack(fill=tk.X)
+        (self.watchlist_header_frame, self.watchlist_rows_frame,
+         self.watchlist_header_frame_r, self.watchlist_rows_frame_r) = _split_table(
+            self.watchlist_container, "⭐ 관심 주식"
+        )
+
         # 퇴직연금 테이블
-        self.pension_container = tk.Frame(self.root, bg="white")
+        self.pension_container = tk.Frame(self.tables_inner, bg="white")
         self.pension_container.pack(fill=tk.X)
         (self.pension_header_frame, self.pension_rows_frame,
          self.pension_header_frame_r, self.pension_rows_frame_r) = _split_table(
@@ -597,6 +796,11 @@ class PortfolioWindow:
             command=self._toggle_maximize,
         ).pack(side=tk.LEFT, padx=3)
 
+        ttk.Button(bottom, text="⭐ 관심 추가",
+                   command=self._add_watchlist).pack(side=tk.LEFT, padx=(6, 2))
+        ttk.Button(bottom, text="⭐ 관심 삭제",
+                   command=self._prompt_delete_watchlist).pack(side=tk.LEFT, padx=2)
+
         tk.Label(bottom, text="투명도", font=("SF Pro", 9), foreground="#666").pack(side=tk.LEFT, padx=(8, 2))
         self.alpha_scale = tk.Scale(
             bottom, from_=0.3, to=1.0, resolution=0.05,
@@ -611,7 +815,7 @@ class PortfolioWindow:
         )
         self.time_label.pack(side=tk.LEFT, padx=8)
 
-        ttk.Button(bottom, text="종료", command=self.root.quit).pack(side=tk.RIGHT)
+        ttk.Button(bottom, text="종료", command=self._on_quit).pack(side=tk.RIGHT)
 
     def _render_header(self):
         """헤더 재구성 — title=='' 인 컬럼은 이전 컬럼과 병합"""
@@ -727,10 +931,116 @@ class PortfolioWindow:
         req_w = width or self.root.winfo_reqwidth()
         self.root.geometry(f"{req_w}x{req_h}")
 
+    def _add_watchlist(self):
+        """관심 주식 추가 — 티커 6자리 입력받아 holdings.json 에 추가 후 리로드"""
+        from tkinter import simpledialog, messagebox
+        code = simpledialog.askstring(
+            "관심 주식 추가",
+            "6자리 종목코드 입력 (예: 005930)",
+            parent=self.root,
+        )
+        if not code:
+            return
+        code = code.strip()
+        if not (code.isdigit() and len(code) == 6):
+            messagebox.showerror("입력 오류", "6자리 숫자 종목코드가 필요합니다.",
+                                 parent=self.root)
+            return
+        # 이미 존재하는지 확인
+        if any(s["ticker"] == code for s in self.holdings):
+            messagebox.showwarning("중복", "이미 목록에 있는 종목입니다.",
+                                   parent=self.root)
+            return
+        # 종목명 조회 (Toss summary → 실패 시 Naver)
+        name = ""
+        try:
+            r = requests.get(
+                f"https://wts-info-api.tossinvest.com/api/v2/stock-infos/A{code}/summary",
+                headers={"User-Agent": USER_AGENT, "Origin": "https://tossinvest.com",
+                         "Referer": "https://tossinvest.com/"}, timeout=5)
+            name = r.json().get("result", {}).get("name", "") or ""
+        except Exception:
+            pass
+        if not name:
+            try:
+                url = f"https://finance.naver.com/item/main.naver?code={code}"
+                resp = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=5)
+                soup = BeautifulSoup(resp.text, "html.parser")
+                node = soup.select_one("div.wrap_company h2 a")
+                if node:
+                    name = node.get_text(strip=True)
+            except Exception:
+                pass
+        if not name:
+            name = code
+        self.holdings_data.setdefault("holdings", []).append({
+            "ticker": code, "name": name, "shares": 0, "avg_price": 0,
+            "invested": 0, "buy_date": "", "market": "KOSPI", "account": "관심",
+        })
+        save_json(HOLDINGS_PATH, self.holdings_data)
+        self.reload_data()
+
+    def _prompt_delete_watchlist(self):
+        """현재 관심 주식 목록을 팝업 메뉴로 보여주고 선택 시 삭제"""
+        from tkinter import messagebox
+        watches = [s for s in self.holdings if s.get("account") == "관심"]
+        if not watches:
+            messagebox.showinfo("관심 주식", "관심 주식이 없습니다.", parent=self.root)
+            return
+        menu = tk.Menu(self.root, tearoff=0)
+        for s in watches:
+            t = s["ticker"]
+            menu.add_command(
+                label=f"{s.get('name', t)} ({t})",
+                command=lambda t=t: self._delete_watchlist(t),
+            )
+        # 버튼 근처 위치에 팝업 — 마우스 위치 사용
+        x = self.root.winfo_pointerx()
+        y = self.root.winfo_pointery()
+        try:
+            menu.tk_popup(x, y)
+        finally:
+            menu.grab_release()
+
+    def _delete_watchlist(self, ticker: str):
+        """관심 주식 1건 삭제"""
+        from tkinter import messagebox
+        stock = next((s for s in self.holdings if s["ticker"] == ticker), None)
+        if not stock or stock.get("account") != "관심":
+            return
+        if not messagebox.askyesno(
+                "관심 주식 삭제",
+                f"{stock.get('name', ticker)} ({ticker}) 를 목록에서 제거할까요?",
+                parent=self.root):
+            return
+        self.holdings_data["holdings"] = [
+            s for s in self.holdings_data.get("holdings", [])
+            if not (s["ticker"] == ticker and s.get("account") == "관심")
+        ]
+        save_json(HOLDINGS_PATH, self.holdings_data)
+        self.reload_data()
+
+    def _on_quit(self):
+        """창 X 버튼 / 종료 버튼 / SIGTERM → after 예약 취소 + 프로세스 종료"""
+        for attr in ("_refresh_job", "_countdown_job"):
+            job = getattr(self, attr, None)
+            if job:
+                try:
+                    self.root.after_cancel(job)
+                except Exception:
+                    pass
+        try:
+            self.root.destroy()
+        except Exception:
+            pass
+        os._exit(0)
+
     def _toggle_us_panel(self):
         if self.us_visible_var.get():
+            # tables_scroll_wrap 앞에 배치 (table_container 는 tables_inner 내부라 형제 아님)
+            anchor = getattr(self, "tables_scroll_wrap", None) or self.table_container
             self.us_container.pack(fill=tk.X, padx=6, pady=(6, 4),
-                                   before=self.table_container)
+                                   before=anchor)
             self._render_us_indices()
         else:
             self.us_container.pack_forget()
@@ -740,13 +1050,30 @@ class PortfolioWindow:
     def _on_row_click(self, ticker: str):
         pass
 
+    def _on_row_right_click(self, ticker: str, event=None):
+        """우클릭 — 관심 주식이면 삭제 메뉴"""
+        stock = next((s for s in self.holdings if s["ticker"] == ticker), None)
+        if not stock or stock.get("account") != "관심":
+            return
+        menu = tk.Menu(self.root, tearoff=0)
+        menu.add_command(
+            label=f"⭐ 관심에서 제거: {stock.get('name', ticker)}",
+            command=lambda: self._delete_watchlist(ticker),
+        )
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
     def _on_row_double_click(self, ticker: str):
         url = f"https://tossinvest.com/stocks/A{ticker}"
-        self._open_toss_in_existing_tab(url)
+        self._open_in_existing_tab(url)
 
-    def _open_toss_in_existing_tab(self, url: str):
-        """기존 Chrome/Safari의 tossinvest.com 탭이 있으면 그 탭 URL 교체, 없으면 새로"""
-        # Chrome 시도
+    def _open_in_existing_tab(self, url: str):
+        """Chrome/Safari에서 URL 의 host 와 동일한 탭이 있으면 그 탭 URL 교체, 없으면 새로"""
+        from urllib.parse import urlparse
+        host = urlparse(url).hostname or ""
+        # tossinvest 한국(/stocks/A...) 과 미국(/stocks/XXX)이 같은 탭을 쓰도록 host 만 매칭
         chrome_script = f'''
 tell application "Google Chrome"
     set foundTab to false
@@ -754,7 +1081,7 @@ tell application "Google Chrome"
         set tabIdx to 0
         repeat with t in tabs of w
             set tabIdx to tabIdx + 1
-            if URL of t contains "tossinvest.com" then
+            if URL of t contains "{host}" then
                 set URL of t to "{url}"
                 set active tab index of w to tabIdx
                 set index of w to 1
@@ -770,7 +1097,6 @@ tell application "Google Chrome"
     end if
 end tell
 '''
-        # Safari 시도 (fallback)
         safari_script = f'''
 tell application "Safari"
     set foundTab to false
@@ -778,7 +1104,7 @@ tell application "Safari"
         set tabIdx to 0
         repeat with t in tabs of w
             set tabIdx to tabIdx + 1
-            if URL of t contains "tossinvest.com" then
+            if URL of t contains "{host}" then
                 set URL of t to "{url}"
                 set current tab of w to t
                 set index of w to 1
@@ -811,9 +1137,11 @@ end tell
         self.holdings_data = load_json(HOLDINGS_PATH)
         self.holdings = self.holdings_data.get("holdings", [])
         self.peaks = load_json(PEAKS_PATH, default={})
-        # 리로드 시 수급·US 캐시도 강제 초기화
+        # 리로드 시 수급·컨센서스·US 캐시도 강제 초기화
         self.investor_cache.clear()
         self.investor_cache_ts = 0
+        self.consensus_cache.clear()
+        self.consensus_cache_ts = 0
         self.us_indices = []
         self.us_indices_ts = 0
         self._sync_historical_peaks()
@@ -832,19 +1160,28 @@ end tell
         save_json(PEAKS_PATH, self.peaks)
 
     def _render_us_indices(self):
-        """미국 증시 패널 렌더 — 좌/우 2컬럼 분할"""
-        for w in self.us_frame.winfo_children():
-            w.destroy()
+        """미국 증시 패널 렌더 — 좌/우 2컬럼 분할 (더블 버퍼링)"""
+        # 기존 us_frame 을 유지한 채 staging frame 에 전체 빌드 후 교체 (깜빡임 방지)
+        old_us_frame = self.us_frame
+        staging = tk.Frame(old_us_frame.master, bg=old_us_frame.cget("bg"))
+        self.us_frame = staging
         if not self.us_indices:
-            tk.Label(self.us_frame, text="로딩 중...", bg="white", fg="#999",
+            tk.Label(staging, text="로딩 중...", bg="white", fg="#999",
                      font=("SF Pro", 9)).pack(anchor="w", padx=4)
+            try:
+                info = old_us_frame.pack_info()
+                kwargs = {(k if k != "in" else "in_"): v for k, v in info.items()}
+                staging.pack(**kwargs)
+            except Exception:
+                staging.pack(fill=tk.X)
+            old_us_frame.destroy()
             return
 
         def build_col(parent, indices, title_suffix=""):
             # 헤더
             hdr = tk.Frame(parent, bg="#e8e8e8")
             hdr.pack(fill=tk.X)
-            for col_idx, title in enumerate(["지표", "종가", "등락률", "선물", "설명"]):
+            for col_idx, title in enumerate(["지표", "현재가", "등락률", "선물", "설명"]):
                 w = [10, 9, 7, 7, 28][col_idx]
                 anchor = "w" if col_idx in (0, 4) else "e"
                 tk.Label(hdr, text=title, width=w, font=("SF Pro", 9, "bold"),
@@ -866,17 +1203,31 @@ end tell
                 fut_color = sign_color(idx["fut_pct"]) if idx.get("fut_pct") is not None else "#999"
                 fut_txt = f"{idx['fut_pct']:+.2f}%" if idx.get("fut_pct") is not None else "-"
 
-                tk.Label(row, text=idx["name"], width=10, font=("SF Mono", 10),
-                         bg=bg, fg="#222", anchor="w", padx=3, pady=1).grid(row=0, column=0, sticky="nsew")
-                tk.Label(row, text=f"{idx['price']:,.2f}", width=9, font=("SF Mono", 10),
-                         bg=bg, fg="#222", anchor="e", padx=3, pady=1).grid(row=0, column=1, sticky="nsew")
-                tk.Label(row, text=f"{idx['pct']:+.2f}%", width=7, font=("SF Mono", 10),
-                         bg=bg, fg=pct_color, anchor="e", padx=3, pady=1).grid(row=0, column=2, sticky="nsew")
-                tk.Label(row, text=fut_txt, width=7, font=("SF Mono", 10),
-                         bg=bg, fg=fut_color, anchor="e", padx=3, pady=1).grid(row=0, column=3, sticky="nsew")
-                tk.Label(row, text=idx.get("note", ""), width=28, font=("SF Pro", 9),
-                         bg=bg, fg="#777", anchor="w",
-                         padx=3, pady=1).grid(row=0, column=4, sticky="nsew")
+                symbol = idx.get("symbol", "")
+                url = resolve_us_indicator_url(symbol)
+                fut_symbol = idx.get("fut_symbol") or ""
+                fut_url = resolve_us_indicator_url(fut_symbol) if fut_symbol else url
+                closed = not is_market_open(market_of_symbol(symbol))
+                name_display = f"💤 {idx['name']}" if closed else idx["name"]
+
+                labels = [
+                    tk.Label(row, text=name_display, width=10, font=("SF Mono", 10),
+                             bg=bg, fg="#222", anchor="w", padx=3, pady=1, cursor="pointinghand"),
+                    tk.Label(row, text=f"{idx['price']:,.2f}", width=9, font=("SF Mono", 10),
+                             bg=bg, fg="#222", anchor="e", padx=3, pady=1, cursor="pointinghand"),
+                    tk.Label(row, text=f"{idx['pct']:+.2f}%", width=7, font=("SF Mono", 10),
+                             bg=bg, fg=pct_color, anchor="e", padx=3, pady=1, cursor="pointinghand"),
+                    tk.Label(row, text=fut_txt, width=7, font=("SF Mono", 10),
+                             bg=bg, fg=fut_color, anchor="e", padx=3, pady=1, cursor="pointinghand"),
+                    tk.Label(row, text=idx.get("note", ""), width=28, font=("SF Pro", 9),
+                             bg=bg, fg="#777", anchor="w", padx=3, pady=1, cursor="pointinghand"),
+                ]
+                for col_idx, lbl in enumerate(labels):
+                    lbl.grid(row=0, column=col_idx, sticky="nsew")
+                    # 선물 셀(index 3) 클릭 시 선물 심볼 링크로
+                    target_url = fut_url if col_idx == 3 and fut_symbol else url
+                    lbl.bind("<Button-1>", lambda e, u=target_url: self._open_in_existing_tab(u))
+                row.bind("<Button-1>", lambda e, u=url: self._open_in_existing_tab(u))
 
         # 3등분 컨테이너: 선행 / (반도체+한국현재) / 매크로
         cols_wrap = tk.Frame(self.us_frame, bg="white")
@@ -938,23 +1289,25 @@ end tell
         build_col(macro_top, macro)
         build_col(macro_bottom, adr)
 
+        # staging → 실제 위치로 스왑
+        try:
+            info = old_us_frame.pack_info()
+            kwargs = {(k if k != "in" else "in_"): v for k, v in info.items()}
+            staging.pack(**kwargs)
+        except Exception:
+            staging.pack(fill=tk.X)
+        old_us_frame.destroy()
+
     def _refresh_us_indices_if_needed(self):
-        """미국 증시: 2분마다 실시간 갱신 (장 열림 시)"""
+        """미국 증시: 30초 TTL — 장중 현재가 실시간 반영"""
         import time as _t
         now = _t.time()
-        if now - self.us_indices_ts < 120 and self.us_indices:
+        if now - self.us_indices_ts < 30 and self.us_indices:
             return
         self.us_indices = fetch_us_indices_with_futures()
         self.us_indices_ts = now
         if hasattr(self, "us_frame") and self.us_visible_var.get():
             self._render_us_indices()
-
-    def _sync_nxt_support(self):
-        """각 종목의 NXT(시간외) 거래 지원 여부 조회 (앱 시작 시 1회)"""
-        for stock in self.holdings:
-            ticker = stock["ticker"]
-            if ticker not in self.nxt_cache:
-                self.nxt_cache[ticker] = fetch_nxt_support(ticker)
 
     def _check_alert(self, stock, current_price, peak_price, pnl_pct, from_peak_pct):
         """손절/익절 경고 체크 → 모달 알림"""
@@ -1032,13 +1385,47 @@ end tell
                     self.investor_cache[t] = r
         self.investor_cache_ts = now
 
+    def _refresh_consensus_cache_if_needed(self):
+        """애널리스트 컨센서스 갱신 — 1시간 TTL (거의 매일 단위 업데이트)"""
+        import time as _t
+        now = _t.time()
+        if now - self.consensus_cache_ts < 3600 and self.consensus_cache:
+            return
+        tickers = [s["ticker"] for s in self.holdings]
+        with ThreadPoolExecutor(max_workers=min(len(tickers), 8)) as pool:
+            results = pool.map(fetch_target_consensus, tickers)
+            for t, r in zip(tickers, results):
+                # 실패 시 이전 값 유지 (기존 로직과 동일)
+                if r:
+                    self.consensus_cache[t] = r
+        self.consensus_cache_ts = now
+
     # 세부 투자자 컬럼 — 작고 연한 폰트로 표시
     SUBTLE_KEYS = {"pension", "fin_inv", "trust", "pef",
                    "insurance", "bank", "other_fin", "other_corp"}
 
+    @staticmethod
+    def _fade_hex(color: str, ratio: float = 0.5) -> str:
+        """hex 색상을 흰색과 혼합해 투명도 효과 (ratio=0.5 → 50% 페이드)"""
+        if not isinstance(color, str) or not color.startswith("#") or len(color) != 7:
+            return color
+        try:
+            r = int(color[1:3], 16)
+            g = int(color[3:5], 16)
+            b = int(color[5:7], 16)
+            r = int(r + (255 - r) * ratio)
+            g = int(g + (255 - g) * ratio)
+            b = int(b + (255 - b) * ratio)
+            return f"#{r:02x}{g:02x}{b:02x}"
+        except Exception:
+            return color
+
     def _make_row(self, row_idx: int, ticker: str, cells: list,
-                  row_bg: str = "white", parent=None, parent_r=None):
-        """한 행 생성 (고정 width로 헤더와 정렬 맞춤)"""
+                  row_bg: str = "white", parent=None, parent_r=None,
+                  faded: bool = False):
+        """한 행 생성 (고정 width로 헤더와 정렬 맞춤)
+        faded=True 면 fg/cell_bg 색상을 50% 투명하게 (💤 거래 불가 종목용)
+        """
         all_keys = [c[0] for c in self.COLS]
         cell_by_key = dict(zip(all_keys, cells))
 
@@ -1066,6 +1453,11 @@ end tell
                         fg = "#d06b5f"
                     elif fg == "#1f4e8f":
                         fg = "#5a7ca8"
+                # 💤 장마감 종목 — 전체 70% 페이드
+                if faded:
+                    fg = self._fade_hex(fg, 0.7)
+                    if cell_bg != row_bg:
+                        cell_bg = self._fade_hex(cell_bg, 0.7)
                 lbl = tk.Label(
                     frame, text=text, width=max(5, pw // 8),
                     font=font_style, bg=cell_bg, fg=fg,
@@ -1075,6 +1467,9 @@ end tell
                 lbl.grid(row=0, column=col_idx, sticky="nsew")
                 lbl.bind("<Button-1>", lambda e, t=ticker: self._on_row_click(t))
                 lbl.bind("<Double-1>", lambda e, t=ticker: self._on_row_double_click(t))
+                lbl.bind("<Button-2>", lambda e, t=ticker: self._on_row_right_click(t, e))
+                lbl.bind("<Button-3>", lambda e, t=ticker: self._on_row_right_click(t, e))
+                lbl.bind("<Control-Button-1>", lambda e, t=ticker: self._on_row_right_click(t, e))
 
         left_target = parent if parent is not None else self.rows_frame
         # parent_r=None 은 "우측 영역 렌더 금지" (퇴직연금) — fallback 금지
@@ -1098,24 +1493,39 @@ end tell
 
         # 수급 캐시 갱신 (필요 시)
         self._refresh_investor_cache_if_needed()
+        self._refresh_consensus_cache_if_needed()
 
         # 미국 증시 실시간 갱신 (2분마다, 표시 중일 때만)
         if hasattr(self, "us_visible_var") and self.us_visible_var.get():
             self._refresh_us_indices_if_needed()
 
-        # 기존 행 제거 (일반 + 퇴직연금, 좌/우 모두)
-        for fr_name in ["rows_frame", "rows_frame_r",
-                        "pension_rows_frame", "pension_rows_frame_r"]:
-            fr = getattr(self, fr_name, None)
-            if fr is not None:
-                for w in fr.winfo_children():
-                    w.destroy()
+        # 더블 버퍼링 — 새 Frame 을 백그라운드에서 만들어 끝나면 pack 스왑
+        # 깜빡임 방지: 기존 Frame destroy 하지 않고 숨겨진 새 Frame 에 행 빌드 후 교체
+        frame_names = [
+            "rows_frame", "rows_frame_r",
+            "pension_rows_frame", "pension_rows_frame_r",
+            "watchlist_rows_frame", "watchlist_rows_frame_r",
+        ]
+        self._old_frames_to_swap = {}
+        for fr_name in frame_names:
+            old = getattr(self, fr_name, None)
+            if old is None:
+                continue
+            # 같은 부모 / 같은 bg 로 비가시 staging frame 생성
+            staging = tk.Frame(old.master, bg=old.cget("bg"))
+            self._old_frames_to_swap[fr_name] = (old, staging)
+            setattr(self, fr_name, staging)  # _make_row 가 새 staging 에 그림
         if hasattr(self, "_row_ticker"):
             self._row_ticker.clear()
 
         if not self.holdings:
             if hasattr(self, "time_label"):
                 self.time_label.config(text="보유 종목 없음")
+            # 빈 상태 — staging 정리 후 속성 원복
+            for fr_name, (old, staging) in getattr(self, "_old_frames_to_swap", {}).items():
+                staging.destroy()
+                setattr(self, fr_name, old)
+            self._old_frames_to_swap = {}
             self._refresh_job = self.root.after(self.interval_ms, self.refresh)
             return
 
@@ -1125,6 +1535,8 @@ end tell
         prices = {t: d["price"] for t, d in toss_data.items()}
         volumes = {t: d["volume"] for t, d in toss_data.items()}
         bases = {t: d["base"] for t, d in toss_data.items()}  # 전일 종가
+        trade_dates = {t: d.get("trade_date", "") for t, d in toss_data.items()}
+        opens = {t: d.get("open", 0) for t, d in toss_data.items()}  # 시가 (0=미결정)
         # 실패 종목은 네이버로 폴백 (거래량 없음)
         missing = [t for t in tickers if t not in prices]
         if missing:
@@ -1140,21 +1552,62 @@ end tell
         sell_fee_pct = self.config.get("sell_fee_pct", 0.2)
         fee_multiplier = 1 - (sell_fee_pct / 100)
 
-        # 일반/퇴직연금 분리 — 테이블 별 인덱스 및 합계
-        main_idx = pension_idx = 0
+        # 일반/퇴직연금/관심 분리 — 테이블 별 인덱스 및 합계
+        main_idx = pension_idx = watch_idx = 0
         main_invested = main_current = 0
         main_shares = pension_shares = 0
         pension_invested = pension_current = 0
 
-        for stock in self.holdings:
-            is_pension = stock.get("account") == "퇴직연금"
-            parent = self.pension_rows_frame if is_pension else self.rows_frame
-            # 퇴직연금은 외국인/기관 등 우측 투자자 정보 생략
-            parent_r = None if is_pension else self.rows_frame_r
+        # 각 테이블 내에서 거래 중인 종목은 위, 💤 는 아래로 정렬
+        _phase = kr_session_phase()
+        try:
+            from zoneinfo import ZoneInfo
+            _today_kst = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d")
+        except Exception:
+            _today_kst = datetime.now().strftime("%Y-%m-%d")
+
+        def _sleep_flag(s):
+            if _phase == "REGULAR":
+                return 0
+            if _phase == "EXTENDED":
+                # 오늘 거래량(단일가 주문 접수 포함) 있으면 활성
+                return 0 if volumes.get(s["ticker"], 0) > 0 else 1
+            return 1  # CLOSED
+
+        def _day_change_pct(s):
+            t = s["ticker"]
+            cur = prices.get(t, 0) or 0
+            base = bases.get(t, 0) or 0
+            return ((cur - base) / base * 100) if (cur and base) else 0.0
+
+        _account_order = {"": 0, "관심": 1, "퇴직연금": 2}
+        # 정렬 키: (계정 그룹, 💤 는 아래, 전일대비 등락률 내림차순)
+        sorted_holdings = sorted(
+            self.holdings,
+            key=lambda s: (
+                _account_order.get(s.get("account", ""), 9),
+                _sleep_flag(s),
+                -_day_change_pct(s),
+            ),
+        )
+
+        for stock in sorted_holdings:
+            account = stock.get("account", "")
+            is_pension = account == "퇴직연금"
+            is_watch = account == "관심"
             if is_pension:
+                parent = self.pension_rows_frame
+                parent_r = None
                 row_idx = pension_idx
                 pension_idx += 1
+            elif is_watch:
+                parent = self.watchlist_rows_frame
+                parent_r = self.watchlist_rows_frame_r
+                row_idx = watch_idx
+                watch_idx += 1
             else:
+                parent = self.rows_frame
+                parent_r = self.rows_frame_r
                 row_idx = main_idx
                 main_idx += 1
             ticker = stock["ticker"]
@@ -1163,13 +1616,14 @@ end tell
             buy_price = stock["avg_price"]
             current_price = prices.get(ticker)
 
-            total_invested += buy_price * shares
-            if is_pension:
-                pension_invested += buy_price * shares
-                pension_shares += shares
-            else:
-                main_invested += buy_price * shares
-                main_shares += shares
+            if not is_watch:
+                total_invested += buy_price * shares
+                if is_pension:
+                    pension_invested += buy_price * shares
+                    pension_shares += shares
+                else:
+                    main_invested += buy_price * shares
+                    main_shares += shares
 
             flow = self.investor_cache.get(ticker, {})
             indiv = flow.get("개인", 0) if flow else 0
@@ -1210,6 +1664,9 @@ end tell
                     "shares": (str(shares), "#333"),
                     "buy": (f"{buy_price:,}", "#333"),
                     "cur": ("-", "#999"),
+                    "target_money": ("-", "#999"),
+                    "target_pct": ("", "#999"),
+                    "opinion": ("-", "#999"),
                     "peak_money": ("-", "#999"),
                     "peak_pct": ("", "#999"),
                     "pnl_amt_money": ("-", "#999"),
@@ -1244,16 +1701,18 @@ end tell
 
             # 세후 현재가 (수수료·세금 차감) - 토스 기준
             net_price = current_price * fee_multiplier
-            pnl_pct = (net_price - buy_price) / buy_price * 100
+            pnl_pct = (net_price - buy_price) / buy_price * 100 if buy_price else 0
             from_peak_pct = (current_price - peak_price) / peak_price * 100 if peak_price else 0
-            stock_current = round(net_price * shares)
-            total_current += stock_current
-            if is_pension:
-                pension_current += stock_current
-            else:
-                main_current += stock_current
+            stock_current = round(net_price * shares) if shares else 0
+            if not is_watch:
+                total_current += stock_current
+                if is_pension:
+                    pension_current += stock_current
+                else:
+                    main_current += stock_current
 
-            triggered = self._check_alert(stock, current_price, peak_price, pnl_pct, from_peak_pct)
+            triggered = None if is_watch else self._check_alert(
+                stock, current_price, peak_price, pnl_pct, from_peak_pct)
 
             # 행 배경 및 상태 텍스트
             if triggered == "stop_loss" or pnl_pct <= self.config["stop_loss_alert_pct"]:
@@ -1293,8 +1752,19 @@ end tell
             elif is_peak_drop:
                 status_cell = ("⚠ 하락", "white", "#4a90c2", True)  # 손실 중 → 파랑
 
-            # 시간외(NXT) 거래 가능하면 이름 뒤에 작은 시계 아이콘
-            name_display = f"{name} 🕐" if self.nxt_cache.get(ticker) else name
+            # 💤 표시 조건 — 토스가 알려주는 마지막 체결 날짜로 판정
+            #  정규장: 항상 활성
+            #  장전/장후(08-09 / 15:40-20): 오늘자 체결 있으면 활성, 없으면 💤
+            #  그 외: 💤
+            phase = kr_session_phase()
+            if phase == "REGULAR":
+                is_sleeping = False
+            elif phase == "EXTENDED":
+                # 오늘 거래량(단일가 주문 접수 포함) 있으면 활성
+                is_sleeping = volumes.get(ticker, 0) == 0
+            else:
+                is_sleeping = True
+            name_display = f"💤 {name}" if is_sleeping else name
 
             # 종목명 뱃지 — 손절/하락은 파랑, 익절은 빨강
             name_cell = (name_display, name_color)
@@ -1347,6 +1817,35 @@ end tell
             else:
                 day_chg_amt_cell = ("-", "#999")
                 day_chg_pct_cell = ("", "#999")
+            # 오늘 거래 없는 종목은 '전일대비' 의미 없음 → 공백
+            if is_sleeping:
+                day_chg_amt_cell = ("", "#999")
+                day_chg_pct_cell = ("", "#999")
+
+            # 애널리스트 컨센서스 (목표주가 / 현재가 대비 / 투자의견)
+            consensus = self.consensus_cache.get(ticker) or {}
+            target_price = consensus.get("target")
+            opinion_text = consensus.get("opinion") or ""
+            if target_price and current_price:
+                gap_pct = (target_price - current_price) / current_price * 100
+                target_money_cell = (f"{target_price:,}", "#555")
+                # 괴리율 — 양수(상승 여력)면 빨강 계열, 음수면 파랑 계열 (연하게)
+                target_pct_cell = (f"({gap_pct:+.1f}%)", _light_color(gap_pct))
+            else:
+                target_money_cell = ("-", "#999")
+                target_pct_cell = ("", "#999")
+            score = consensus.get("score")
+            if opinion_text or score is not None:
+                op_color = "#c0392b" if "매수" in opinion_text else (
+                    "#1f4e8f" if "매도" in opinion_text else "#555")
+                # 점수만 표시, 색상으로 매수/매도 구분 — 점수 없으면 텍스트 사용
+                if score is not None:
+                    display = f"{score:.2f}"
+                else:
+                    display = opinion_text or "-"
+                opinion_cell = (display, op_color)
+            else:
+                opinion_cell = ("-", "#999")
 
             # 손익금액/% 분리 (%는 연한색)
             pnl_amt_money_cell = (format_signed(pnl_amount) if pnl_amount else "0", sign_color(pnl_amount))
@@ -1365,6 +1864,9 @@ end tell
                 "shares": (str(shares), "#222"),
                 "buy": (f"{buy_price:,}", "#222"),
                 "cur": cur_cell,
+                "target_money": target_money_cell,
+                "target_pct": target_pct_cell,
+                "opinion": opinion_cell,
                 "peak_money": peak_money_cell,
                 "peak_pct": peak_pct_cell,
                 "pnl_amt_money": pnl_amt_money_cell,
@@ -1383,9 +1885,15 @@ end tell
                 "other_fin": other_fin_cell,
                 "other_corp": other_corp_cell,
             }
+            # 관심 주식: 매수/수량/손익/피크 같은 보유 의존 컬럼은 공백
+            if is_watch:
+                for k in ("shares", "buy", "peak_money", "peak_pct",
+                          "pnl_amt_money", "pnl_amt_pct"):
+                    cell_by_key[k] = ("", "#999")
             # 현재 COLS 순서대로 배열
             cells = [cell_by_key[c[0]] for c in self.COLS]
-            self._make_row(row_idx, ticker, cells, row_bg=row_bg, parent=parent, parent_r=parent_r)
+            self._make_row(row_idx, ticker, cells, row_bg=row_bg,
+                           parent=parent, parent_r=parent_r, faded=is_sleeping)
 
         save_json(PEAKS_PATH, self.peaks)
 
@@ -1398,6 +1906,9 @@ end tell
                 "shares": (f"{shares_sum}주", "#222"),
                 "buy": (f"{invested:,}", "#222"),
                 "cur": (f"{current:,}", sign_color(pnl)),
+                "target_money": ("", "#555"),
+                "target_pct": ("", "#555"),
+                "opinion": ("", "#555"),
                 "peak_money": ("", "#555"),
                 "peak_pct": ("", "#555"),
                 "pnl_amt_money": (format_signed(pnl) if pnl else "0", sign_color(pnl)),
@@ -1444,6 +1955,24 @@ end tell
         if pension_idx > 0:
             _append_total(self.pension_rows_frame, None,
                           pension_idx, pension_invested, pension_current, pension_shares)
+
+        # 더블 버퍼 스왑 — staging 에 모두 그린 뒤 한 번에 교체 → 깜빡임 제거
+        if hasattr(self, "_old_frames_to_swap"):
+            for fr_name, (old, staging) in self._old_frames_to_swap.items():
+                try:
+                    info = old.pack_info()
+                    # pack 옵션 키 매핑 (in → in_)
+                    kwargs = {(k if k != "in" else "in_"): v for k, v in info.items()}
+                    staging.pack(**kwargs)
+                    old.destroy()
+                except Exception:
+                    # 폴백: 그냥 pack(fill=X)
+                    try:
+                        staging.pack(fill=tk.X)
+                        old.destroy()
+                    except Exception:
+                        pass
+            self._old_frames_to_swap = {}
 
         self.last_refresh_time = datetime.now().strftime("%H:%M:%S")
         self._start_countdown()
