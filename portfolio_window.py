@@ -225,42 +225,46 @@ def fetch_us_indices_with_futures() -> list:
     except ImportError:
         return []
 
-    # 좌측: 한국 증시에 직접적 영향력 높은 지표
-    # 우측: 간접 영향 / 보조 지표
-    # (심볼, 이름, 설명, 선물, 위치(L/M/R), 방향성)
+    # 버핏식 슬림화 — 섹터별 선행지표 (Tier 0 / Tier 1 / Tier 2)
+    # (심볼, 이름, 설명, 선물, tier, sector, 방향성)
+    # tier: "T0"=핵심 대시보드, "T1"=내 섹터, "T2"=관심 섹터
     pairs = [
-        # --- 🌙 선행 지표 (개장 전 체크) ---
-        ("EWY", "EWY", "MSCI Korea ETF — 외국인 투심", None, "L", "direct"),
-        ("KORU", "KORU", "Korea 3x 레버리지 — 외국인 신호 강도", None, "L", "direct"),
-        ("^N225", "Nikkei 225", "일본 — 아시아 동조", "NKD=F", "L", "direct"),
-        ("^IXIC", "나스닥", "미국 기술주", "NQ=F", "L", "direct"),
-        ("^GSPC", "S&P 500", "미국 대형주", "ES=F", "L", "direct"),
-        ("^DJI", "다우존스", "미국 산업주", "YM=F", "L", "direct"),
-        ("^RUT", "Russell 2000", "미국 중소형 — KOSDAQ 선행", "RTY=F", "L", "direct"),
-        # --- 가운데: 반도체 특화 ---
-        ("^SOX", "필라델피아반도체", "미국 반도체 30개사 지수", "SOX=F", "M", "direct"),
-        ("NVDA", "NVIDIA", "AI 칩 대장 — HBM 수요 직결 (삼전·하닉)", None, "M", "direct"),
-        ("TSM", "TSMC", "파운드리 1위 — 삼성파운드리 경쟁/업황", None, "M", "direct"),
-        ("MU", "Micron", "메모리 반도체 — 하이닉스·삼전 비교", None, "M", "direct"),
-        ("ASML", "ASML", "EUV 장비 — 반도체 장비주 선행", None, "M", "direct"),
-        ("AMAT", "Applied M.", "장비 대장 — 원익IPS·기가비스 선행", None, "M", "direct"),
-        # --- 🇰🇷 한국 지수 (관심 ETF 패널에서 활용, 별도 섹션 렌더 없음) ---
-        ("^KS200", "KOSPI 200", "코스피 200", None, "R", "direct"),
-        ("^KQ11", "KOSDAQ", "코스닥", None, "R", "direct"),
-        # --- 🌍 매크로 환경 (글로벌 영향 / 환율 · 금리 · 원자재 · 변동성) ---
-        ("KRW=X", "USD/KRW", "원달러 환율 — 외국인 수급·수출주", None, "MX", "inverse"),
-        ("^TNX", "미국 10Y", "10년물 국채금리 — 성장주 벨류에이션", "ZN=F", "MX", "inverse"),
-        ("DX-Y.NYB", "달러인덱스", "USD 강도 — 신흥국 자금 흐름", None, "MX", "inverse"),
-        ("GC=F", "Gold", "금 — 위험 회피 시 상승", None, "MX", "inverse"),
-        ("HG=F", "Copper", "구리 — 경기 선행 (\"박사 구리\")", None, "MX", "direct"),
-        ("CL=F", "WTI 원유", "국제 유가 — 정유·에너지 직결", None, "MX", "neutral"),
-        ("NG=F", "천연가스", "에너지 — 가스·유틸리티", None, "MX", "neutral"),
-        ("^VIX", "VIX", "변동성 — 20↑ 경계, 30↑ 공포", None, "MX", "inverse"),
-        # --- 🇺🇸 한국 ADR (뉴욕 상장 한국 기업 — 야간 선행) ---
-        ("PKX", "POSCO ADR", "포스코 — 철강·소재주 선행", None, "ADR", "direct"),
-        ("LPL", "LG Display ADR", "LG디스플레이 — 디스플레이·IT주 선행", None, "ADR", "direct"),
-        ("KB", "KB Financial ADR", "KB금융 — 국내 은행주 대표", None, "ADR", "direct"),
-        ("CPNG", "Coupang", "쿠팡 — 플랫폼·유통 심리", None, "ADR", "direct"),
+        # --- 🔴 Tier 0: 핵심 대시보드 (항상 최상단) ---
+        ("EWY", "EWY", "MSCI Korea — 외국인 투심", None, "T0", "dashboard", "direct"),
+        ("KRW=X", "USD/KRW", "원달러 환율 — 수출주·외국인 수급", None, "T0", "dashboard", "inverse"),
+        ("^VIX", "VIX", "공포지수 — 20↑ 경계, 30↑ 공포", None, "T0", "dashboard", "inverse"),
+        ("^GSPC", "S&P 500", "미국 대형주 — 글로벌 리스크 온/오프", "ES=F", "T0", "dashboard", "direct"),
+
+        # --- 💪 Tier 1: 내 섹터 (굵게) ---
+        # 🔧 반도체 (기가비스·예스티)
+        ("^SOX", "필라델피아반도체", "미국 반도체 30개사 지수", "SOX=F", "T1", "반도체", "direct"),
+        ("NVDA", "NVIDIA", "AI 칩 대장 — HBM 수요", None, "T1", "반도체", "direct"),
+        ("TSM", "TSMC", "파운드리 1위 — 업황 대표", None, "T1", "반도체", "direct"),
+        # 🛡️ 방산 (퍼스텍)
+        ("LMT", "Lockheed Martin", "방산 대장 — 글로벌 방산 경기", None, "T1", "방산", "direct"),
+        # 🚢 중공업/조선 (HJ중공업)
+        ("CAT", "Caterpillar", "중장비 — 경기 사이클 선행", None, "T1", "중공업", "direct"),
+        # 🏢 리츠 (삼성FN리츠)
+        ("^TNX", "미국 10Y", "10년물 국채금리 — 리츠·성장주 할인율", "ZN=F", "T1", "리츠", "inverse"),
+        ("VNQ", "Vanguard REIT", "미국 리츠 ETF — 부동산 투심", None, "T1", "리츠", "direct"),
+        # ⚡ 에너지 (흥구석유)
+        ("CL=F", "WTI 원유", "국제 유가 — 정유·에너지 직결", None, "T1", "에너지", "neutral"),
+
+        # --- 👀 Tier 2: 관심 섹터 (연하게) ---
+        # 🚗 자동차
+        ("TSLA", "Tesla", "EV 대장 — 자동차·2차전지 선행", None, "T2", "자동차", "direct"),
+        # 🏗️ 건설
+        ("DHI", "D.R. Horton", "미국 최대 주택건설사", None, "T2", "건설", "direct"),
+        # 💰 금융
+        ("JPM", "JPMorgan", "미국 금융 대장 — 은행주 투심", None, "T2", "금융", "direct"),
+        # 📱 플랫폼/AI
+        ("^IXIC", "나스닥", "미국 기술주 전체", "NQ=F", "T2", "플랫폼", "direct"),
+        ("META", "Meta", "플랫폼 대장 — 광고·AI", None, "T2", "플랫폼", "direct"),
+        # 🧬 바이오
+        ("XBI", "SPDR Biotech", "미국 바이오 ETF", None, "T2", "바이오", "direct"),
+        # 🇰🇷 한국지수 (컨텍스트용)
+        ("^KS200", "KOSPI 200", "코스피 200 지수", None, "T2", "한국지수", "direct"),
+        ("^KQ11", "KOSDAQ", "코스닥 지수", None, "T2", "한국지수", "direct"),
     ]
     import math
     def _is_valid(v):
@@ -324,7 +328,7 @@ def fetch_us_indices_with_futures() -> list:
     # 병렬 조회 — 각 심볼 ~0.4s 소요, 30개 직렬 시 13s → ThreadPool 로 단축
     symbols: list = []
     seen: set = set()
-    for cash, _, _, fut, _, _ in pairs:
+    for cash, _, _, fut, _, _, _ in pairs:
         for s in (cash, fut):
             if s and s not in seen:
                 seen.add(s)
@@ -335,7 +339,7 @@ def fetch_us_indices_with_futures() -> list:
             quotes[sym] = res
 
     out = []
-    for cash, name, note, fut, side, direction in pairs:
+    for cash, name, note, fut, tier, sector, direction in pairs:
         close, prev = quotes.get(cash, (None, None))
         if close is None:
             continue
@@ -352,7 +356,7 @@ def fetch_us_indices_with_futures() -> list:
             "symbol": cash,
             "fut_symbol": fut,
             "name": name, "note": note, "price": close, "pct": pct,
-            "fut_pct": fut_pct, "side": side,
+            "fut_pct": fut_pct, "tier": tier, "sector": sector,
             "impact": impact_text, "icon": icon, "icon_color": icon_color,
         })
     return out
@@ -591,7 +595,7 @@ class PortfolioWindow:
     # 관심 주식/ETF 전용 컬럼 — 전부 single-line (섹터·투자의견 분리 컬럼)
     COLS_WATCH = [
         ("sector",           None, "섹터",          "", 140, "w"),
-        ("name",             None, "종목",          "", 110, "w"),
+        ("name",             None, "종목",          "", 150, "w"),
         ("volume",           None, "거래량",        "",  70, "e"),
         ("cur",              None, "현재가",        "",  95, "e"),
         ("day_combined",     None, "전일대비",      "", 120, "e"),
@@ -618,7 +622,7 @@ class PortfolioWindow:
         ("buy",          None, "매수가",   "",   95, "e"),
         ("cur",          None, "현재가",   "",   95, "e"),
         ("pnl_combined", None, "손익금액", "",  180, "e"),
-        ("day_combined", None, "전일대비", "",  120, "e"),
+        ("day_combined", None, "전일대비", "",  150, "e"),
         ("peak_combined", None, "피크가",  "",  130, "e"),
     ]
     PENSION_FROZEN_KEYS = {"name", "shares", "buy", "cur",
@@ -732,7 +736,7 @@ class PortfolioWindow:
         self._refresh_us_indices_if_needed()
         self.refresh()
         # 초기 내용에 맞춰 크기 조정
-        self.root.after(100, lambda: self._autosize_height(width=1400))
+        self.root.after(100, lambda: self._autosize_height(width=1000))
 
     def _build_ui(self):
         if getattr(self, "_ui_built", False):
@@ -945,7 +949,7 @@ class PortfolioWindow:
             mon_x, mon_w = self._current_monitor_frame(cur_x, cur_y)
             self.root.geometry(f"{mon_w}x{h}+{mon_x}+{cur_y}")
         else:
-            default_w = 400 if self.compact_mode else 1400
+            default_w = 400 if self.compact_mode else 1000
             self.root.geometry(f"{default_w}x{h}+{cur_x}+{cur_y}")
 
     def _current_monitor_frame(self, x, y):
@@ -999,7 +1003,7 @@ class PortfolioWindow:
             self._toggle_us_panel()
             width = 400
         else:
-            width = 1400
+            width = 1000
         self._render_header()
         self.refresh()
         # 폭은 모드별, 높이는 내용에 맞춰
@@ -1273,7 +1277,7 @@ class PortfolioWindow:
         if not messagebox.askyesno(
                 "보유 종목 삭제",
                 f"{name} ({ticker}) {shares}주 @{avg:,} 를 보유 목록에서 제거할까요?\n\n"
-                "전량 매도로 기록됩니다 (total_invested 차감, history 항목 추가).",
+                "전량 매도로 기록되고, 관심 주식으로 이동됩니다.",
                 parent=self.root):
             return
         self.holdings_data["holdings"] = [
@@ -1288,17 +1292,32 @@ class PortfolioWindow:
             "event": "매도",
             "detail": f"{name} {shares}주 전량 매도 (avg @{avg:,})",
         })
+        # 관심 주식으로 자동 이동 — 이미 관심/관심ETF 에 있으면 스킵
+        already_watch = any(
+            s["ticker"] == ticker and s.get("account") in ("관심", "관심ETF")
+            for s in self.holdings_data["holdings"])
+        if not already_watch:
+            self.holdings_data["holdings"].append({
+                "ticker": ticker,
+                "name": name,
+                "shares": 0,
+                "avg_price": 0,
+                "invested": 0,
+                "buy_date": "",
+                "market": stock.get("market", "KOSPI"),
+                "account": "관심",
+            })
         save_json(HOLDINGS_PATH, self.holdings_data)
         self.reload_data()
 
     def _add_watchlist(self):
-        """관심 추가 — ETF / 주식 선택 + 티커 입력"""
+        """관심 주식 추가 — 티커 입력"""
         from tkinter import messagebox
         # 메인 창 topmost 일시 해제 (다이얼로그 앞에 뜨게)
         prev_topmost = self.root.attributes("-topmost")
         self.root.attributes("-topmost", False)
         dlg = tk.Toplevel(self.root)
-        dlg.title("⭐ 관심 추가")
+        dlg.title("⭐ 관심 주식 추가")
         dlg.transient(self.root)
         dlg.grab_set()
         dlg.resizable(False, False)
@@ -1315,20 +1334,11 @@ class PortfolioWindow:
 
         frm = ttk.Frame(dlg, padding=12)
         frm.grid(sticky="nsew")
-        # 유형 라디오
-        type_var = tk.StringVar(value="관심")
-        ttk.Label(frm, text="유형").grid(row=0, column=0, sticky="w", padx=4, pady=4)
-        type_row = ttk.Frame(frm)
-        type_row.grid(row=0, column=1, sticky="w", padx=4, pady=4)
-        ttk.Radiobutton(type_row, text="⭐ 주식", value="관심",
-                        variable=type_var).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Radiobutton(type_row, text="📊 ETF", value="관심ETF",
-                        variable=type_var).pack(side=tk.LEFT)
         # 티커 입력
-        ttk.Label(frm, text="종목코드 (6자리)").grid(row=1, column=0, sticky="w", padx=4, pady=4)
+        ttk.Label(frm, text="종목코드 (6자리)").grid(row=0, column=0, sticky="w", padx=4, pady=4)
         code_var = tk.StringVar()
         e = ttk.Entry(frm, textvariable=code_var, width=20)
-        e.grid(row=1, column=1, padx=4, pady=4)
+        e.grid(row=0, column=1, padx=4, pady=4)
         e.focus_set()
 
         result = {"ok": False}
@@ -1343,11 +1353,10 @@ class PortfolioWindow:
                 return
             result["ok"] = True
             result["code"] = code
-            result["type"] = type_var.get()
             dlg.destroy()
 
         btns = ttk.Frame(frm)
-        btns.grid(row=2, column=0, columnspan=2, pady=(8, 0))
+        btns.grid(row=1, column=0, columnspan=2, pady=(8, 0))
         ttk.Button(btns, text="추가", command=_submit).pack(side=tk.LEFT, padx=4)
         ttk.Button(btns, text="취소", command=dlg.destroy).pack(side=tk.LEFT, padx=4)
         dlg.bind("<Return>", lambda ev: _submit())
@@ -1357,7 +1366,7 @@ class PortfolioWindow:
         if not result.get("ok"):
             return
         code = result["code"]
-        account_type = result["type"]
+        account_type = "관심"
         # 종목명 조회 (Toss summary → 실패 시 Naver)
         name = ""
         try:
@@ -1595,7 +1604,7 @@ end tell
         save_json(PEAKS_PATH, self.peaks)
 
     def _render_us_indices(self):
-        """미국 증시 패널 렌더 — 좌/우 2컬럼 분할 (더블 버퍼링)"""
+        """선행지표 패널 렌더 — Tier 0 스트립 + Tier 1/2 섹터 블록 그리드"""
         # 기존 us_frame 을 유지한 채 staging frame 에 전체 빌드 후 교체 (깜빡임 방지)
         old_us_frame = self.us_frame
         staging = tk.Frame(old_us_frame.master, bg=old_us_frame.cget("bg"))
@@ -1612,124 +1621,48 @@ end tell
             old_us_frame.destroy()
             return
 
-        def build_col(parent, indices, title_suffix=""):
-            # 헤더
-            hdr = tk.Frame(parent, bg="#e8e8e8")
-            hdr.pack(fill=tk.X)
-            for col_idx, title in enumerate(["지표", "현재가", "등락률", "선물", "설명"]):
-                w = [10, 9, 7, 7, 28][col_idx]
-                anchor = "w" if col_idx in (0, 4) else "e"
-                tk.Label(hdr, text=title, width=w, font=("SF Pro", 9, "bold"),
-                         bg="#e8e8e8", fg="#222", anchor=anchor,
-                         padx=3, pady=2).grid(row=0, column=col_idx, sticky="nsew")
-            # 각 행 — 영향에 따라 배경색 (긍정=연빨강, 부정=연파랑, 중립=흰색)
-            for idx in indices:
-                impact = idx.get("impact", "")
-                if impact == "긍정":
-                    bg = "#fce8e6"    # 연한 빨강
-                elif impact == "부정":
-                    bg = "#e6ecf5"    # 연한 파랑
-                else:
-                    bg = "white"
+        # 섹터 메타데이터: (섹터키, 이모지+표시명)
+        ALL_SECTORS = [
+            ("반도체",   "🔧 반도체"),
+            ("방산",     "🛡️ 방산"),
+            ("중공업",   "🚢 중공업/조선"),
+            ("리츠",     "🏢 리츠"),
+            ("에너지",   "⚡ 에너지"),
+            ("자동차",   "🚗 자동차"),
+            ("건설",     "🏗️ 건설"),
+            ("금융",     "💰 금융"),
+            ("플랫폼",   "📱 플랫폼/AI"),
+            ("바이오",   "🧬 바이오"),
+            ("한국지수", "🇰🇷 한국지수"),
+        ]
+        # 섹터 → 관심 ETF (holdings 에서 account=="관심ETF")
+        etfs_by_sector = {
+            "반도체":   ["091160", "091230"],           # KODEX 반도체, TIGER 반도체
+            "방산":     ["449450"],                      # TIGER 방산
+            "중공업":   ["446770"],                      # KODEX 조선해양
+            "리츠":     ["329200"],                      # TIGER 리츠부동산인프라
+            "에너지":   [],
+            "자동차":   ["091180"],                      # KODEX 자동차
+            "건설":     ["117700"],                      # KODEX 건설
+            "금융":     ["091170"],                      # KODEX 은행
+            "플랫폼":   ["365040"],                      # TIGER AI코리아그로스
+            "바이오":   ["143860"],                      # TIGER 바이오
+            "한국지수": ["122630", "229200"],            # KODEX 레버리지, KODEX 코스닥150
+        }
+        # 섹터별 지표 index
+        by_sector = {}
+        for x in self.us_indices:
+            by_sector.setdefault(x.get("sector"), []).append(x)
 
-                row = tk.Frame(parent, bg=bg)
-                row.pack(fill=tk.X)
-                pct_color = sign_color(idx["pct"])
-                fut_color = sign_color(idx["fut_pct"]) if idx.get("fut_pct") is not None else "#999"
-                fut_txt = f"{idx['fut_pct']:+.2f}%" if idx.get("fut_pct") is not None else "-"
+        # 🔴 Tier 0: 상단 가로 스트립
+        tier0 = [x for x in self.us_indices if x.get("tier") == "T0"]
+        self._render_tier0_strip(self.us_frame, tier0)
 
-                symbol = idx.get("symbol", "")
-                url = resolve_us_indicator_url(symbol)
-                fut_symbol = idx.get("fut_symbol") or ""
-                fut_url = resolve_us_indicator_url(fut_symbol) if fut_symbol else url
-                closed = not is_market_open(market_of_symbol(symbol))
-                name_display = f"💤 {idx['name']}" if closed else idx["name"]
-
-                labels = [
-                    tk.Label(row, text=name_display, width=10, font=("SF Mono", 10),
-                             bg=bg, fg="#222", anchor="w", padx=3, pady=1, cursor="pointinghand"),
-                    tk.Label(row, text=f"{idx['price']:,.2f}", width=9, font=("SF Mono", 10),
-                             bg=bg, fg="#222", anchor="e", padx=3, pady=1, cursor="pointinghand"),
-                    tk.Label(row, text=f"{idx['pct']:+.2f}%", width=7, font=("SF Mono", 10),
-                             bg=bg, fg=pct_color, anchor="e", padx=3, pady=1, cursor="pointinghand"),
-                    tk.Label(row, text=fut_txt, width=7, font=("SF Mono", 10),
-                             bg=bg, fg=fut_color, anchor="e", padx=3, pady=1, cursor="pointinghand"),
-                    tk.Label(row, text=idx.get("note", ""), width=28, font=("SF Pro", 9),
-                             bg=bg, fg="#777", anchor="w", padx=3, pady=1, cursor="pointinghand"),
-                ]
-                for col_idx, lbl in enumerate(labels):
-                    lbl.grid(row=0, column=col_idx, sticky="nsew")
-                    # 선물 셀(index 3) 클릭 시 선물 심볼 링크로
-                    target_url = fut_url if col_idx == 3 and fut_symbol else url
-                    lbl.bind("<Button-1>", lambda e, u=target_url: self._open_in_existing_tab(u))
-                row.bind("<Button-1>", lambda e, u=url: self._open_in_existing_tab(u))
-
-        # 3등분 컨테이너: 선행 / (반도체+한국현재) / 매크로
-        cols_wrap = tk.Frame(self.us_frame, bg="white")
-        cols_wrap.pack(fill=tk.X)
-        for c in (0, 2, 4):
-            cols_wrap.grid_columnconfigure(c, weight=1, uniform="col")
-
-        def _make_col(col_idx, section_title):
-            wrap = tk.Frame(cols_wrap, bg="white")
-            wrap.grid(row=0, column=col_idx, sticky="new", padx=3)
-            tk.Label(wrap, text=section_title,
-                     font=("SF Pro", 10, "bold"), bg="white", fg="#555",
-                     anchor="w", padx=2, pady=2).pack(fill=tk.X)
-            return wrap
-
-        # 왼쪽: 선행 지표 + 반도체 (상하 배치)
-        left_wrap = tk.Frame(cols_wrap, bg="white")
-        left_wrap.grid(row=0, column=0, sticky="new", padx=3)
-        tk.Label(left_wrap, text="🌙 선행 지표",
-                 font=("SF Pro", 10, "bold"), bg="white", fg="#555",
-                 anchor="w", padx=2, pady=2).pack(fill=tk.X)
-        left_col = tk.Frame(left_wrap, bg="white")
-        left_col.pack(fill=tk.X)
-        tk.Label(left_wrap, text="💾 반도체",
-                 font=("SF Pro", 10, "bold"), bg="white", fg="#555",
-                 anchor="w", padx=2, pady=2).pack(fill=tk.X, pady=(8, 0))
-        mid_top = tk.Frame(left_wrap, bg="white")
-        mid_top.pack(fill=tk.X)
-        tk.Frame(cols_wrap, width=1, bg="#ddd").grid(row=0, column=1, sticky="ns")
-
-        # 가운데: 관심 ETF (한국 ETF · 지수 통합)
-        mid_wrap = tk.Frame(cols_wrap, bg="white")
-        mid_wrap.grid(row=0, column=2, sticky="new", padx=3)
-        tk.Label(mid_wrap, text="📊 관심 ETF",
-                 font=("SF Pro", 10, "bold"), bg="white", fg="#555",
-                 anchor="w", padx=2, pady=2).pack(fill=tk.X)
-        watch_etf_panel = tk.Frame(mid_wrap, bg="white")
-        watch_etf_panel.pack(fill=tk.X)
-
-        tk.Frame(cols_wrap, width=1, bg="#ddd").grid(row=0, column=3, sticky="ns")
-
-        # 오른쪽: 매크로 + 한국 ADR (상하 배치)
-        macro_wrap = tk.Frame(cols_wrap, bg="white")
-        macro_wrap.grid(row=0, column=4, sticky="new", padx=3)
-        tk.Label(macro_wrap, text="🌍 매크로",
-                 font=("SF Pro", 10, "bold"), bg="white", fg="#555",
-                 anchor="w", padx=2, pady=2).pack(fill=tk.X)
-        macro_top = tk.Frame(macro_wrap, bg="white")
-        macro_top.pack(fill=tk.X)
-        tk.Label(macro_wrap, text="🇺🇸 한국 ADR",
-                 font=("SF Pro", 10, "bold"), bg="white", fg="#555",
-                 anchor="w", padx=2, pady=2).pack(fill=tk.X, pady=(8, 0))
-        macro_bottom = tk.Frame(macro_wrap, bg="white")
-        macro_bottom.pack(fill=tk.X)
-
-        left = [x for x in self.us_indices if x.get("side") == "L"]
-        mid = [x for x in self.us_indices if x.get("side") == "M"]
-        right = [x for x in self.us_indices if x.get("side") == "R"]
-        macro = [x for x in self.us_indices if x.get("side") == "MX"]
-        adr = [x for x in self.us_indices if x.get("side") == "ADR"]
-        build_col(left_col, left)
-        build_col(mid_top, mid)
-        build_col(macro_top, macro)
-        build_col(macro_bottom, adr)
-
-        # 📊 관심 ETF 렌더 (선행지표 아래)
-        self._render_watch_etf_panel(watch_etf_panel)
+        # 섹터 블록 그리드 (Tier 1/2 구분 없이 하나로)
+        sector_wrap = tk.Frame(self.us_frame, bg="white")
+        sector_wrap.pack(fill=tk.X, pady=(8, 0))
+        self._render_sector_blocks(sector_wrap, ALL_SECTORS, by_sector,
+                                    etfs_by_sector, faded=False)
 
         # staging → 실제 위치로 스왑
         try:
@@ -1740,93 +1673,199 @@ end tell
             staging.pack(fill=tk.X)
         old_us_frame.destroy()
 
-    def _render_watch_etf_panel(self, parent):
-        """관심 ETF 컴팩트 렌더 — [섹터|ETF|현재가|전일대비]"""
-        etfs = [s for s in self.holdings if s.get("account") == "관심ETF"]
-        if not etfs:
-            tk.Label(parent, text="(없음)", bg="white", fg="#999",
-                     font=("SF Pro", 9)).pack(anchor="w", padx=4)
-            return
-        # Toss 용 (KRX 6자리) 과 yfinance 용 (^ 시작 지수) 분리
-        kr_tickers = [s["ticker"] for s in etfs if not s["ticker"].startswith("^")]
-        toss = fetch_toss_prices_batch(kr_tickers) if kr_tickers else {}
-        # yfinance 지수 데이터는 self.us_indices 캐시 에서 재활용
-        yf_map = {x.get("symbol"): x for x in getattr(self, "us_indices", [])}
+    def _render_tier0_strip(self, parent, indices: list):
+        """Tier 0 — 상단 가로 스트립 (각 셀 content 크기, 왼쪽 정렬)"""
+        strip = tk.Frame(parent, bg="#2c3e50")
+        strip.pack(fill=tk.X, pady=(0, 6))
+        for col_idx, idx in enumerate(indices):
+            cell = tk.Frame(strip, bg="#2c3e50")
+            cell.pack(side=tk.LEFT, padx=(0, 16))
 
-        def _price_base(s):
-            t = s["ticker"]
-            if t.startswith("^"):
-                yf = yf_map.get(t, {})
-                price = yf.get("price", 0) or 0
-                # yfinance pct 는 이미 계산돼 있음 → base 복원
-                pct = yf.get("pct", 0) or 0
-                base = price / (1 + pct / 100) if price and (1 + pct / 100) != 0 else 0
-                return price, base
-            d = toss.get(t, {})
-            return d.get("price", 0) or 0, d.get("base", 0) or 0
+            pct = idx.get("pct", 0)
+            pct_color = "#ff6b6b" if pct > 0 else ("#5dade2" if pct < 0 else "#bbb")
+            symbol = idx.get("symbol", "")
+            url = resolve_us_indicator_url(symbol)
+            closed = not is_market_open(market_of_symbol(symbol))
+            name_disp = f"💤 {idx['name']}" if closed else idx["name"]
+            note = idx.get("note", "")
 
-        # 전일대비 등락률 내림차순 정렬
-        def _etf_pct(s):
-            p, b = _price_base(s)
-            return ((p - b) / b * 100) if (p and b) else 0.0
-        etfs = sorted(etfs, key=lambda s: -_etf_pct(s))
+            # 2줄 레이아웃: [name · price · pct] / [note]
+            line1 = tk.Frame(cell, bg="#2c3e50")
+            line1.pack(fill=tk.X, padx=8, pady=(6, 0))
+            labels = []
+            lbl_name = tk.Label(line1, text=name_disp, font=("SF Pro", 11, "bold"),
+                                bg="#2c3e50", fg="white", cursor="pointinghand")
+            lbl_name.pack(side=tk.LEFT)
+            labels.append(lbl_name)
+            lbl_price = tk.Label(line1, text=f"{idx['price']:,.2f}",
+                                 font=("SF Mono", 10),
+                                 bg="#2c3e50", fg="#ecf0f1", cursor="pointinghand")
+            lbl_price.pack(side=tk.LEFT, padx=(10, 0))
+            labels.append(lbl_price)
+            lbl_pct = tk.Label(line1, text=f"{pct:+.2f}%",
+                               font=("SF Mono", 11, "bold"),
+                               bg="#2c3e50", fg=pct_color, cursor="pointinghand")
+            lbl_pct.pack(side=tk.LEFT, padx=(6, 0))
+            labels.append(lbl_pct)
 
-        # 헤더 — 데이터와 정확히 같은 font 를 사용해야 char width 가 일치
-        hdr = tk.Frame(parent, bg="#e8e8e8")
-        hdr.pack(fill=tk.X)
-        hdr_cols = [("섹터", 7, "w"), ("ETF", 15, "w"),
-                    ("현재가", 9, "e"), ("전일대비", 18, "e")]
-        for col_idx, (title, w, align) in enumerate(hdr_cols):
-            tk.Label(hdr, text=title, width=w, font=("SF Mono", 9),
-                     bg="#e8e8e8", fg="#222",
-                     anchor={"w": "w", "e": "e"}[align],
-                     padx=3, pady=2).grid(row=0, column=col_idx, sticky="nsew")
-        # 행
-        for idx, stock in enumerate(etfs):
-            t = stock["ticker"]
-            price, base = _price_base(stock)
-            is_index = t.startswith("^")
-            diff = price - base if (price and base) else 0
-            pct = (diff / base * 100) if base else 0
-            sign_col = sign_color(diff)
-            # 지수는 소수 2자리, 일반 ETF 는 정수 포맷
-            if is_index:
-                price_text = f"{price:,.2f}" if price else "-"
-                diff_text = f"{diff:+,.2f} ({pct:+.2f}%)" if diff else "0"
-            else:
-                price_text = f"{int(price):,}" if price else "-"
-                diff_text = (f"{format_signed(int(round(diff)))} ({pct:+.2f}%)"
-                             if diff else "0")
-            bg = "#f7f7f7" if idx % 2 == 1 else "white"
-            row = tk.Frame(parent, bg=bg)
-            row.pack(fill=tk.X)
-            url = (f"https://finance.yahoo.com/quote/{t}"
-                   if is_index
-                   else f"https://tossinvest.com/stocks/A{t}")
+            lbl_note = None
+            if note:
+                lbl_note = tk.Label(cell, text=note, font=("SF Pro", 8),
+                                    bg="#2c3e50", fg="#95a5a6", anchor="w",
+                                    cursor="pointinghand")
+                lbl_note.pack(fill=tk.X, padx=8, pady=(0, 6))
+                labels.append(lbl_note)
 
-            def _bind(widget, u=url):
-                widget.bind("<Button-1>",
-                            lambda e, u=u: self._open_in_existing_tab(u))
+            for w in [cell, line1, *labels]:
+                w.bind("<Button-1>", lambda e, u=url: self._open_in_existing_tab(u))
 
-            sector_text = stock.get("sector", "")
-            labels = [
-                tk.Label(row, text=sector_text, width=7,
-                         font=("SF Mono", 9), bg=bg, fg="#444",
-                         anchor="w", padx=3, pady=1, cursor="pointinghand"),
-                tk.Label(row, text=stock.get("name", t), width=15,
-                         font=("SF Mono", 9), bg=bg, fg="#222",
-                         anchor="w", padx=3, pady=1, cursor="pointinghand"),
-                tk.Label(row, text=price_text, width=9,
-                         font=("SF Mono", 9), bg=bg, fg="#222",
-                         anchor="e", padx=3, pady=1, cursor="pointinghand"),
-                tk.Label(row, text=diff_text,
-                         width=18, font=("SF Mono", 9), bg=bg, fg=sign_col,
-                         anchor="e", padx=3, pady=1, cursor="pointinghand"),
-            ]
-            for col_idx, lbl in enumerate(labels):
-                lbl.grid(row=0, column=col_idx, sticky="nsew")
-                _bind(lbl)
-            _bind(row)
+    def _render_sector_blocks(self, parent, sectors: list, by_sector: dict,
+                              etfs_by_sector: dict, faded: bool):
+        """섹터별 한 행 레이아웃 — [섹터명 | 선행지표들 inline | 관심ETF들 inline]"""
+        hdr_bg = "#eaeaea" if faded else "#d5dbe0"
+        hdr_fg = "#888" if faded else "#2c3e50"
+
+        # 관심 ETF 가격 일괄 조회 (Toss)
+        all_etf_tickers = [t for lst in etfs_by_sector.values() for t in lst]
+        toss = fetch_toss_prices_batch(all_etf_tickers) if all_etf_tickers else {}
+        holdings_by_ticker = {s["ticker"]: s for s in self.holdings}
+
+        # 3 컬럼: 섹터명(고정) | 선행지표(content 크기) | ETF(남는 공간)
+        parent.grid_columnconfigure(0, weight=0, minsize=140)
+        parent.grid_columnconfigure(1, weight=0)
+        parent.grid_columnconfigure(2, weight=1)
+
+        for row_idx, (sector_key, sector_label) in enumerate(sectors):
+            indices = by_sector.get(sector_key, [])
+            etf_tickers = etfs_by_sector.get(sector_key, [])
+            bg = "#fafafa" if row_idx % 2 == 1 else "white"
+
+            # 섹터명 셀
+            name_cell = tk.Frame(parent, bg=hdr_bg,
+                                 highlightbackground="#e0e0e0", highlightthickness=1)
+            name_cell.grid(row=row_idx, column=0, sticky="nsew")
+            tk.Label(name_cell, text=sector_label, font=("SF Pro", 10, "bold"),
+                     bg=hdr_bg, fg=hdr_fg, anchor="w",
+                     padx=8, pady=5).pack(fill=tk.BOTH, expand=True)
+
+            # 선행지표 셀 (테이블 정렬: name | price | pct | note)
+            ind_cell = tk.Frame(parent, bg=bg,
+                                highlightbackground="#e0e0e0", highlightthickness=1)
+            ind_cell.grid(row=row_idx, column=1, sticky="nsew")
+            ind_inner = tk.Frame(ind_cell, bg=bg)
+            ind_inner.pack(fill=tk.BOTH, expand=True, padx=4, pady=3)
+            ind_inner.grid_columnconfigure(0, minsize=120)  # name
+            ind_inner.grid_columnconfigure(1, minsize=75)   # price
+            ind_inner.grid_columnconfigure(2, minsize=95)   # pct (+선물)
+            # note col: weight 없음 — content 크기만, 셀 전체 stretch 방지
+            for i, idx in enumerate(indices):
+                self._render_indicator_inline(ind_inner, idx, bg, faded, row_i=i)
+
+            # 관심 ETF 셀 (테이블 정렬: name | price | pct)
+            etf_cell = tk.Frame(parent, bg=bg,
+                                highlightbackground="#e0e0e0", highlightthickness=1)
+            etf_cell.grid(row=row_idx, column=2, sticky="nsew")
+            etf_inner = tk.Frame(etf_cell, bg=bg)
+            etf_inner.pack(fill=tk.BOTH, expand=True, padx=4, pady=3)
+            etf_inner.grid_columnconfigure(0, minsize=150)  # name
+            etf_inner.grid_columnconfigure(1, minsize=80)   # price
+            etf_inner.grid_columnconfigure(2, minsize=60)   # pct
+            etf_inner.grid_columnconfigure(3, weight=1)     # trailing spacer
+            etf_row_i = 0
+            for t in etf_tickers:
+                stock = holdings_by_ticker.get(t)
+                if not stock:
+                    continue
+                self._render_etf_inline(etf_inner, stock, toss.get(t, {}),
+                                         bg, faded, row_i=etf_row_i)
+                etf_row_i += 1
+
+    def _render_indicator_inline(self, parent, idx: dict, bg: str, faded: bool,
+                                  row_i: int = 0):
+        """테이블 정렬 지표 — [name | price | pct% | note] 한 줄에 4 컬럼"""
+        pct = idx.get("pct", 0)
+        pct_color = sign_color(pct)
+        if faded:
+            pct_color = self._fade_hex(pct_color, 0.7)
+
+        fut_pct = idx.get("fut_pct")
+        fut_txt = f" ({fut_pct:+.2f})" if fut_pct is not None else ""
+
+        symbol = idx.get("symbol", "")
+        url = resolve_us_indicator_url(symbol)
+        closed = not is_market_open(market_of_symbol(symbol))
+        name_fg = self._fade_hex("#222", 0.7) if faded else "#222"
+        if closed:
+            name_fg = self._fade_hex(name_fg, 0.85)
+        name_disp = f"💤{idx['name']}" if closed else idx['name']
+        note = idx.get("note", "")
+        note_fg = self._fade_hex("#888", 0.5) if faded else "#888"
+
+        price = idx.get("price", 0)
+        price_txt = f"{price:,.2f}" if price else "-"
+        price_fg = self._fade_hex(name_fg, 0.3) if faded else "#555"
+
+        lbl_name = tk.Label(parent, text=name_disp, font=("SF Mono", 9),
+                            bg=bg, fg=name_fg, anchor="w",
+                            cursor="pointinghand")
+        lbl_name.grid(row=row_i, column=0, sticky="w", pady=1)
+        lbl_price = tk.Label(parent, text=price_txt, font=("SF Mono", 9),
+                             bg=bg, fg=price_fg, anchor="e",
+                             cursor="pointinghand")
+        lbl_price.grid(row=row_i, column=1, sticky="e", padx=(4, 0), pady=1)
+        lbl_pct = tk.Label(parent, text=f"{pct:+.2f}%{fut_txt}",
+                           font=("SF Mono", 9),
+                           bg=bg, fg=pct_color, anchor="e",
+                           cursor="pointinghand")
+        lbl_pct.grid(row=row_i, column=2, sticky="e", padx=(4, 0), pady=1)
+        lbl_note = None
+        if note:
+            lbl_note = tk.Label(parent, text=note, font=("SF Pro", 8),
+                                bg=bg, fg=note_fg, anchor="w",
+                                cursor="pointinghand")
+            lbl_note.grid(row=row_i, column=3, sticky="w", padx=(8, 0), pady=1)
+
+        widgets = [lbl_name, lbl_price, lbl_pct]
+        if lbl_note is not None:
+            widgets.append(lbl_note)
+        for w in widgets:
+            w.bind("<Button-1>", lambda e, u=url: self._open_in_existing_tab(u))
+
+    def _render_etf_inline(self, parent, stock: dict, price_data: dict,
+                           bg: str, faded: bool, row_i: int = 0):
+        """테이블 정렬 관심 ETF — [📊name | price | pct%]"""
+        price = price_data.get("price", 0) or 0
+        base = price_data.get("base", 0) or 0
+        diff = price - base if (price and base) else 0
+        pct = (diff / base * 100) if base else 0
+        diff_color = sign_color(diff)
+        if faded:
+            diff_color = self._fade_hex(diff_color, 0.7)
+        name_fg = self._fade_hex("#2c3e50", 0.7) if faded else "#2c3e50"
+        name_font = ("SF Mono", 9) if faded else ("SF Mono", 9, "bold")
+
+        t = stock["ticker"]
+        url = f"https://tossinvest.com/stocks/A{t}"
+        price_txt = f"{int(price):,}" if price else "-"
+        diff_txt = f"{pct:+.2f}%" if diff else "0%"
+        price_fg = self._fade_hex(name_fg, 0.3) if faded else "#555"
+
+        lbl_name = tk.Label(parent, text=f"📊{stock.get('name', t)}",
+                            font=name_font,
+                            bg=bg, fg=name_fg, anchor="w",
+                            cursor="pointinghand")
+        lbl_name.grid(row=row_i, column=0, sticky="w", pady=1)
+        lbl_price = tk.Label(parent, text=price_txt, font=("SF Mono", 9),
+                             bg=bg, fg=price_fg, anchor="e",
+                             cursor="pointinghand")
+        lbl_price.grid(row=row_i, column=1, sticky="e", padx=(4, 0), pady=1)
+        lbl_diff = tk.Label(parent, text=diff_txt, font=("SF Mono", 9),
+                            bg=bg, fg=diff_color, anchor="e",
+                            cursor="pointinghand")
+        lbl_diff.grid(row=row_i, column=2, sticky="e", padx=(4, 0), pady=1)
+
+        for w in (lbl_name, lbl_price, lbl_diff):
+            w.bind("<Button-1>", lambda e, u=url: self._open_in_existing_tab(u))
 
     def _refresh_us_indices_if_needed(self):
         """미국 증시: 30초 TTL — 장중 현재가 실시간 반영"""
@@ -2493,6 +2532,9 @@ end tell
                 name_cell = (name_display, "white", "#1f4e8f", True, "pill")
             elif is_peak_drop and pnl_pct > 0:
                 name_cell = (name_display, "white", "#c0392b", True, "pill")
+            elif is_peak_drop:
+                # 손실 중 + 피크 드롭 = ⚠ 하락 상태 뱃지와 동일 색상
+                name_cell = (name_display, "white", "#4a90c2", True, "pill")
             else:
                 name_cell = (name_display, sign_color(pnl_pct), "#FEE500", True, "pill")
 
@@ -2575,8 +2617,8 @@ end tell
             opinion_text = consensus.get("opinion") or ""
             if target_price and current_price:
                 gap_pct = (target_price - current_price) / current_price * 100
-                target_money_cell = (f"{target_price:,}", "#555")
-                # 괴리율 — 양수(상승 여력)면 빨강 계열, 음수면 파랑 계열 (연하게)
+                # 금액(진한색) + 괴리율(연한색) — 둘 다 부호에 따라 빨강/파랑
+                target_money_cell = (f"{target_price:,}", sign_color(gap_pct))
                 target_pct_cell = (f"({gap_pct:+.1f}%)", _light_color(gap_pct))
             else:
                 target_money_cell = ("-", "#999")
