@@ -22,19 +22,30 @@ class TappableBox(ButtonBehavior, BoxLayout):
 
 def open_toss_stock(ticker: str, is_us: bool = False):
     """Toss Invest 종목 상세 페이지 열기.
-    KR: https://tossinvest.com/stocks/A{6자리코드}
-    US: https://tossinvest.com/stocks/{심볼}
-    Android 에서는 OS 핸들러가 Toss 앱이 있으면 앱으로, 없으면 브라우저로 라우팅.
+    Android 에선 supertoss:// 딥링크로 Toss 앱 직접 실행 (설치된 경우),
+    스킴 핸들러가 없거나 PC 실행 시 https 브라우저로 폴백.
     """
-    import webbrowser
-    if is_us:
-        url = f"https://tossinvest.com/stocks/{ticker}"
-    else:
-        url = f"https://tossinvest.com/stocks/A{ticker}"
+    code = ticker if is_us else f"A{ticker}"
+    deep = f"supertoss://stocks/{code}"
+    https = f"https://tossinvest.com/stocks/{code}"
+
     try:
-        webbrowser.open(url)
+        from jnius import autoclass
+        Intent = autoclass("android.content.Intent")
+        Uri = autoclass("android.net.Uri")
+        PythonActivity = autoclass("org.kivy.android.PythonActivity")
+        intent = Intent(Intent.ACTION_VIEW, Uri.parse(deep))
+        intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        PythonActivity.mActivity.startActivity(intent)
+        return
     except Exception as e:
-        print(f"[toss-link] {e}")
+        print(f"[toss-deep] {e}")
+
+    try:
+        import webbrowser
+        webbrowser.open(https)
+    except Exception as e:
+        print(f"[toss-web] {e}")
 
 from data_service import (fetch_toss_prices_batch, sign_color, format_signed,
                            refresh_warning_sector_cache,
