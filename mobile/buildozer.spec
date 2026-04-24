@@ -23,7 +23,7 @@ orientation = portrait
 android.api = 31
 android.minapi = 26
 android.ndk = 25b
-android.arch = arm64-v8a,armeabi-v7a
+android.archs = arm64-v8a,armeabi-v7a
 
 # 인터넷 권한
 android.permissions = INTERNET
