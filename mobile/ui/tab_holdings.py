@@ -42,16 +42,20 @@ FONT_XS = sp(11)
 FONT_SMALL = sp(12)
 FONT_MD = sp(14)
 FONT_LG = sp(15)
+FONT_XL = sp(17)
 
 # 매도 수수료 0.2% (토스 기준) — 데스크탑과 동일
 SELL_FEE_PCT = 0.2
 FEE_MULTIPLIER = 1 - (SELL_FEE_PCT / 100)
 
-# 4컬럼 폭 비율 (행 1·2 공통)
-COL_NAME = 0.36   # 종목명 / 거래량
-COL_PRICE = 0.18  # 매수가 / 현재가
-COL_PNL = 0.23    # 손익금액(%) / 전일대비(%)
-COL_PEAK = 0.23   # 피크가(%) / 목표가(%)
+# 행 1 (이름/거래량) 컬럼
+COL_NAME_W = 0.72   # 종목명 (보유수) — 넓게
+COL_VOL_W = 0.28    # 거래량 — 우측
+
+# 행 2~4 공통 3등분 (매수가/손익/피크 · 현재가/전일/목표 · 기관/외국인/연기금)
+COL_A = 0.34   # 매수가 / 현재가 / 기관
+COL_B = 0.33   # 손익금액(%) / 전일대비(%) / 외국인(보유%)
+COL_C = 0.33   # 피크가(%) / 목표가(%) / 연기금
 
 
 _NAMED = {"white": "#ffffff", "black": "#000000", "gray": "#888888",
@@ -97,6 +101,34 @@ def _bind_align(lbl):
     """halign/valign 이 실제 적용되도록 text_size 를 위젯 크기에 바인딩."""
     lbl.bind(size=lambda w, v: setattr(w, "text_size", v))
     return lbl
+
+
+def make_amt_pct_cell(amt_text: str, pct_text: str,
+                        amt_color: str, pct_color: str,
+                        size_hint_x: float, bold: bool = False,
+                        font_size=None, height=None):
+    """금액 + (%) 를 2분할하여 각각 우측정렬하는 셀 — 세로 정렬 맞춤.
+    좁은 화면에서도 1줄 유지 (max_lines=1, shorten)."""
+    fs = font_size or sp(14)
+    pct_fs = sp(12)  # pct 는 항상 작은 폰트로 (좁은 공간 대응)
+    h = height or sp(22)
+    wrap = BoxLayout(orientation="horizontal", size_hint_x=size_hint_x,
+                      size_hint_y=None, height=h, spacing=sp(2))
+    amt = Label(text=amt_text, font_size=fs, bold=bold,
+                 color=rgba(amt_color),
+                 halign="right", valign="middle",
+                 size_hint_x=0.58,
+                 max_lines=1, shorten=True, shorten_from="left")
+    amt.bind(size=lambda w, v: setattr(w, "text_size", v))
+    wrap.add_widget(amt)
+    pct = Label(text=pct_text, font_size=pct_fs,
+                 color=rgba(pct_color),
+                 halign="right", valign="middle",
+                 size_hint_x=0.42,
+                 max_lines=1, shorten=True, shorten_from="left")
+    pct.bind(size=lambda w, v: setattr(w, "text_size", v))
+    wrap.add_widget(pct)
+    return wrap
 
 
 def _estimate_text_width(text: str, font_size, bold=False) -> float:
@@ -191,6 +223,13 @@ class TabHoldings(BoxLayout):
         super().__init__(orientation="vertical", **kwargs)
         self.holdings_data = holdings_data
 
+        # 상단 고정 헤더 (스크롤 안됨)
+        self.header_container = BoxLayout(orientation="vertical",
+                                            size_hint_y=None, height=0)
+        self.header_container.bind(
+            minimum_height=self.header_container.setter("height"))
+        self.add_widget(self.header_container)
+
         self.scroll = ScrollView(do_scroll_x=False, do_scroll_y=True,
                                    bar_width=sp(4))
         self.container = BoxLayout(orientation="vertical",
@@ -210,7 +249,8 @@ class TabHoldings(BoxLayout):
         # 하단 툴바: [+ 보유추가] [- 보유삭제]  [✓ 장마감투명]
         from kivy.uix.button import Button
         from kivy.uix.checkbox import CheckBox
-        from ui.dialogs import show_add_holding, show_delete_holding
+        from ui.dialogs import (show_add_holding, show_delete_holding,
+                                   show_json_menu)
         from ui import app_state
         toolbar = BoxLayout(orientation="horizontal", size_hint_y=None,
                              height=sp(44), spacing=sp(6),
@@ -234,6 +274,9 @@ class TabHoldings(BoxLayout):
                                         self.holdings_data, self.refresh)))
         toolbar.add_widget(_tbtn("- 보유 삭제", (0.75, 0.35, 0.35, 1),
                                     lambda *_: show_delete_holding(
+                                        self.holdings_data, self.refresh)))
+        toolbar.add_widget(_tbtn("JSON", (0.45, 0.45, 0.55, 1),
+                                    lambda *_: show_json_menu(
                                         self.holdings_data, self.refresh)))
 
         # 장마감 투명도 체크박스 영역
@@ -282,8 +325,11 @@ class TabHoldings(BoxLayout):
 
     @mainthread
     def _render(self, holdings, prices, peaks, thresholds):
+        # 헤더는 스크롤 밖 고정 컨테이너로
+        self.header_container.clear_widgets()
+        self.header_container.add_widget(self._build_header())
+
         self.container.clear_widgets()
-        self.container.add_widget(self._build_header())
         total_invested = 0
         total_current = 0
         total_yesterday = 0
@@ -341,7 +387,7 @@ class TabHoldings(BoxLayout):
             self._build_total_row(total_invested, total_current, total_yesterday))
 
     def _build_header(self):
-        """2행 4컬럼 헤더 (회색 배경)"""
+        """4행 헤더 (회색 배경) — 종목명/거래량 + 3x3 데이터 그리드"""
         box = BoxLayout(orientation="vertical", size_hint_y=None,
                          padding=(sp(4), sp(6)), spacing=sp(2))
         box.bind(minimum_height=box.setter("height"))
@@ -358,29 +404,29 @@ class TabHoldings(BoxLayout):
                 color=rgba("#666"), halign=halign, valign="middle",
                 size_hint_x=sx, text_size=(None, sp(18)))
 
-        l1 = BoxLayout(orientation="horizontal", size_hint_y=None,
-                        height=sp(18), spacing=sp(4))
-        l1.add_widget(_hdr_cell("종목명 (보유량)", COL_NAME, "left"))
-        l1.add_widget(_hdr_cell("매수가", COL_PRICE, "right"))
-        l1.add_widget(_hdr_cell("손익금액 (%)", COL_PNL, "right"))
-        l1.add_widget(_hdr_cell("피크가 (%)", COL_PEAK, "right"))
-        box.add_widget(l1)
-
+        # Row 2: 매수가 | 손익금액(%) | 외국인(보유%)
         l2 = BoxLayout(orientation="horizontal", size_hint_y=None,
                         height=sp(18), spacing=sp(4))
-        l2.add_widget(_hdr_cell("거래량", COL_NAME, "left"))
-        l2.add_widget(_hdr_cell("현재가", COL_PRICE, "right"))
-        l2.add_widget(_hdr_cell("전일대비 (%)", COL_PNL, "right"))
-        l2.add_widget(_hdr_cell("목표가 (%)", COL_PEAK, "right"))
+        l2.add_widget(_hdr_cell("매수가", COL_A, "center"))
+        l2.add_widget(_hdr_cell("손익금액 (%)", COL_B, "center"))
+        l2.add_widget(_hdr_cell("외국인", COL_C, "center"))
         box.add_widget(l2)
 
+        # Row 3: 현재가 | 전일대비(%) | 기관
         l3 = BoxLayout(orientation="horizontal", size_hint_y=None,
                         height=sp(18), spacing=sp(4))
-        l3.add_widget(_hdr_cell("투자의견", COL_NAME, "left"))
-        l3.add_widget(_hdr_cell("기관", COL_PRICE, "right"))
-        l3.add_widget(_hdr_cell("외국인(보유%)", COL_PNL, "right"))
-        l3.add_widget(_hdr_cell("연기금", COL_PEAK, "right"))
+        l3.add_widget(_hdr_cell("현재가", COL_A, "center"))
+        l3.add_widget(_hdr_cell("전일대비 (%)", COL_B, "center"))
+        l3.add_widget(_hdr_cell("기관", COL_C, "center"))
         box.add_widget(l3)
+
+        # Row 4: 목표가(%) | 피크가(%) | 연기금
+        l4 = BoxLayout(orientation="horizontal", size_hint_y=None,
+                        height=sp(18), spacing=sp(4))
+        l4.add_widget(_hdr_cell("목표가 (%)", COL_A, "center"))
+        l4.add_widget(_hdr_cell("피크가 (%)", COL_B, "center"))
+        l4.add_widget(_hdr_cell("연기금", COL_C, "center"))
+        box.add_widget(l4)
         return box
 
     def _build_holding_row(self, stock, cur_price, base_price, volume,
@@ -442,14 +488,7 @@ class TabHoldings(BoxLayout):
         peak_gap_pct = ((cur_price - peak) / peak * 100) if peak else 0
         target_gap_pct = ((target - cur_price) / cur_price * 100) if (target and cur_price) else 0
 
-        # ─── 행 1: 종목명 (보유량) | 매수가 | 손익금액(%) | 피크가(%)
-        # — 관심종목 탭과 동일 테이블 구조: 플레인 텍스트 + 좌측정렬, 상태는 작은 우측 뱃지
-        l1 = BoxLayout(orientation="horizontal", size_hint_y=None,
-                        height=sp(28), spacing=sp(4))
-        prefix = "zZ " if is_sleeping else ""
-        if account == "퇴직연금":
-            prefix += "[퇴] "
-        # 상태 뱃지 텍스트 (손절 / warn_text — 익절·피크 뱃지는 표시 안 함)
+        # 상태 뱃지 텍스트 (손절 / warn_text)
         if is_stop:
             badge_text, badge_bg = "손절", "#1f4e8f"
         elif warn_text:
@@ -461,146 +500,126 @@ class TabHoldings(BoxLayout):
         else:
             badge_text, badge_bg = "", None
 
-        name_col = BoxLayout(orientation="horizontal", size_hint_x=COL_NAME,
-                              spacing=sp(4))
-        # 종목명 — 텍스트 실제 폭만 차지하도록 바인딩 (뱃지가 이름 바로 옆에 붙도록)
+        name_bold = not (is_sleeping and fade_on)
+
+        # 수급 데이터 미리 파싱
+        flow = investor_cache.get(ticker) or {}
+        inst = flow.get("기관", 0) if flow else None
+        foreign = flow.get("외국인", 0) if flow else None
+        foreign_ratio = flow.get("외국인비율", 0) if flow else 0
+        pension = flow.get("연기금", 0) if flow else None
+
+        # ─── 행 1: 2줄 — (이름 + 거래량 + 뱃지) + (섹터 + 외국인 보유%)
+        l1 = BoxLayout(orientation="vertical", size_hint_y=None,
+                        height=sp(48), padding=(sp(8), sp(3)), spacing=sp(1))
+        name_bg = _c("#dce6f2") if not is_sleeping else _c("#ececec")
+        from kivy.graphics import Color as _Col, Rectangle as _Rect
+        with l1.canvas.before:
+            _Col(*rgba(name_bg))
+            l1._bg = _Rect(pos=l1.pos, size=l1.size)
+        l1.bind(pos=lambda w, v: setattr(w._bg, "pos", v),
+                 size=lambda w, v: setattr(w._bg, "size", v))
+
+        prefix = "zZ " if is_sleeping else ""
+        if account == "퇴직연금":
+            prefix += "[퇴] "
+
+        # Line 1: 종목명 (보유수, 거래량:xx) [뱃지]
+        line_top = BoxLayout(orientation="horizontal", size_hint_y=None,
+                              height=sp(26), spacing=sp(4))
+        name_text = f"{prefix}{name} ({shares}주, 거래량:{format_volume(volume)})"
         name_lbl = Label(
-            text=f"{prefix}{name} ({shares})",
-            bold=not (is_sleeping and fade_on), font_size=FONT_LG,
+            text=name_text, bold=name_bold, font_size=FONT_XL,
             color=rgba(_c(sign_color(pnl_pct))),
             size_hint=(None, 1),
             halign="left", valign="middle")
         name_lbl.bind(texture_size=lambda w, v: setattr(w, "width", v[0]))
-        name_col.add_widget(name_lbl)
+        line_top.add_widget(name_lbl)
+
         if badge_text:
             from kivy.graphics import Color, RoundedRectangle
-            badge_w = sp(28)
+            badge_w = sp(30)
             badge = Label(
-                text=badge_text, bold=True, font_size=sp(9),
+                text=badge_text, bold=True, font_size=sp(10),
                 color=rgba(_c("#ffffff")),
-                size_hint=(None, None), width=badge_w, height=sp(16),
+                size_hint=(None, None), width=badge_w, height=sp(18),
                 halign="center", valign="middle",
-                text_size=(badge_w, sp(16)))
+                text_size=(badge_w, sp(18)))
             with badge.canvas.before:
                 Color(*rgba(_c(badge_bg)))
                 badge._bg = RoundedRectangle(pos=badge.pos, size=badge.size,
                                               radius=[sp(4)])
             badge.bind(pos=lambda w, v: setattr(w._bg, "pos", v),
                         size=lambda w, v: setattr(w._bg, "size", v))
-            name_col.add_widget(badge)
-        # 우측 스페이서 — 이름+뱃지를 좌측에 밀착시킴
-        name_col.add_widget(BoxLayout())
-        l1.add_widget(name_col)
-        l1.add_widget(Label(
-            text=f"{avg:,}원", font_size=FONT_MD,
-            color=rgba(_c("#888")), halign="right", valign="middle",
-            size_hint_x=COL_PRICE, text_size=(None, sp(28))))
-        l1.add_widget(Label(
-            text=f"{format_signed(pnl)} ({pnl_pct:+.2f}%)",
-            bold=not (is_sleeping and fade_on), font_size=FONT_MD,
-            color=rgba(_c(sign_color(pnl))), halign="right", valign="middle",
-            size_hint_x=COL_PNL, text_size=(None, sp(28))))
-        if peak:
-            l1.add_widget(Label(
-                text=f"{int(peak):,} ({peak_gap_pct:+.2f}%)",
-                font_size=FONT_MD,
-                color=rgba(_c(sign_color(peak_gap_pct) if peak_gap_pct < 0 else "#888")),
-                halign="right", valign="middle",
-                size_hint_x=COL_PEAK, text_size=(None, sp(28))))
-        else:
-            l1.add_widget(Label(text="-", color=rgba(_c("#aaa")),
-                                  size_hint_x=COL_PEAK, halign="right",
-                                  valign="middle", text_size=(None, sp(28))))
+            line_top.add_widget(badge)
+        line_top.add_widget(BoxLayout())  # 우측 스페이서
+        l1.add_widget(line_top)
+
+        # Line 2: 섹터:xxx  외국인:xx.xx% 보유
+        sector = sector_cache.get(ticker) or ""
+        sub_parts = []
+        if sector:
+            sub_parts.append(f"섹터:{sector}")
+        if foreign_ratio and foreign_ratio > 0:
+            sub_parts.append(f"외국인:{foreign_ratio:.2f}% 보유")
+        line_bot = Label(
+            text="   ".join(sub_parts),
+            font_size=FONT_SMALL, color=rgba(_c("#666")),
+            size_hint_y=None, height=sp(18),
+            halign="left", valign="middle",
+            max_lines=1, shorten=True, shorten_from="right")
+        line_bot.bind(size=lambda w, v: setattr(w, "text_size", v))
+        l1.add_widget(line_bot)
+
         box.add_widget(l1)
 
-        # ─── 행 2: 거래량 | 현재가 | 전일대비(%) | 목표가(%)
+        # 모든 데이터 셀은 make_amt_pct_cell 로 동일 구조 (금액 58% + % 42%) — 세로 정렬
+        def _cell(amt, pct, amt_color, pct_color=None, col=COL_A, bold=False):
+            return make_amt_pct_cell(
+                amt, pct, amt_color, pct_color or amt_color,
+                size_hint_x=col, bold=bold,
+                font_size=FONT_MD, height=sp(22))
+
+        # ─── 행 2: 매수가 | 손익금액(%) | 외국인
         l2 = BoxLayout(orientation="horizontal", size_hint_y=None,
-                        height=sp(24), spacing=sp(4))
-        l2.add_widget(Label(
-            text=format_volume(volume),
-            font_size=FONT_SMALL, color=rgba(_c("#888")),
-            halign="left", valign="middle",
-            size_hint_x=COL_NAME, text_size=(None, sp(24))))
-        l2.add_widget(Label(
-            text=f"{cur_price:,}원", font_size=FONT_MD,
-            color=rgba(_c("#444")), halign="right", valign="middle",
-            size_hint_x=COL_PRICE, text_size=(None, sp(24))))
-        l2.add_widget(Label(
-            text=f"{format_signed(day_diff)} ({day_pct:+.2f}%)",
-            font_size=FONT_MD, bold=not (is_sleeping and fade_on),
-            color=rgba(_c(sign_color(day_diff))),
-            halign="right", valign="middle",
-            size_hint_x=COL_PNL, text_size=(None, sp(24))))
-        if target:
-            l2.add_widget(Label(
-                text=f"{target:,} ({target_gap_pct:+.2f}%)",
-                font_size=FONT_MD,
-                color=rgba(_c(sign_color(target_gap_pct))),
-                halign="right", valign="middle",
-                size_hint_x=COL_PEAK, text_size=(None, sp(24))))
-        else:
-            l2.add_widget(Label(text="-", color=rgba(_c("#aaa")),
-                                  size_hint_x=COL_PEAK, halign="right",
-                                  valign="middle", text_size=(None, sp(24))))
+                        height=sp(22), spacing=sp(4))
+        l2.add_widget(_cell(f"{avg:,}", "", _c("#666"), col=COL_A))
+        l2.add_widget(_cell(format_signed(pnl), f"({pnl_pct:+.2f}%)",
+                               _c(sign_color(pnl)), col=COL_B, bold=name_bold))
+        l2.add_widget(_cell(format_signed(foreign) if foreign else "", "",
+                               _c(sign_color(foreign)) if foreign else _c("#aaa"),
+                               col=COL_C))
         box.add_widget(l2)
 
-        # ─── 행 3: 투자의견 | 기관 | 외국인(보유%) | 연기금
-        flow = investor_cache.get(ticker) or {}
-        consensus = consensus_cache.get(ticker) or {}
+        # ─── 행 3: 현재가 | 전일대비(%) | 기관
         l3 = BoxLayout(orientation="horizontal", size_hint_y=None,
-                        height=sp(24), spacing=sp(4))
-
-        # 투자의견 — 점수 우선, 없으면 텍스트 (데스크톱과 동일 규칙)
-        opinion_text = consensus.get("opinion") or ""
-        score = consensus.get("score")
-        if opinion_text or score is not None:
-            op_color = ("#c0392b" if "매수" in opinion_text else
-                         "#1f4e8f" if "매도" in opinion_text else "#555")
-            if score is not None:
-                op_display = f"{score:.2f}"
-            else:
-                op_display = opinion_text or "-"
-        else:
-            op_display, op_color = "-", "#aaa"
-        l3.add_widget(Label(
-            text=op_display, font_size=FONT_MD,
-            color=rgba(_c(op_color)),
-            halign="left", valign="middle",
-            size_hint_x=COL_NAME, text_size=(None, sp(24))))
-
-        if flow:
-            inst = flow.get("기관", 0)
-            foreign = flow.get("외국인", 0)
-            foreign_ratio = flow.get("외국인비율", 0)
-            pension = flow.get("연기금", 0)
-            # 기관
-            l3.add_widget(Label(
-                text=format_signed(inst), font_size=FONT_MD,
-                color=rgba(_c(sign_color(inst))),
-                halign="right", valign="middle",
-                size_hint_x=COL_PRICE, text_size=(None, sp(24))))
-            # 외국인 순매수 + (보유%)
-            foreign_text = format_signed(foreign)
-            if foreign_ratio > 0:
-                foreign_text += f" ({foreign_ratio:.2f}%)"
-            l3.add_widget(Label(
-                text=foreign_text, font_size=FONT_MD,
-                color=rgba(_c(sign_color(foreign))),
-                halign="right", valign="middle",
-                size_hint_x=COL_PNL, text_size=(None, sp(24))))
-            # 연기금
-            l3.add_widget(Label(
-                text=format_signed(pension), font_size=FONT_MD,
-                color=rgba(_c(sign_color(pension))),
-                halign="right", valign="middle",
-                size_hint_x=COL_PEAK, text_size=(None, sp(24))))
-        else:
-            for col_w in (COL_PRICE, COL_PNL, COL_PEAK):
-                l3.add_widget(Label(text="-", color=rgba(_c("#aaa")),
-                                      size_hint_x=col_w, halign="right",
-                                      valign="middle",
-                                      text_size=(None, sp(24))))
+                        height=sp(22), spacing=sp(4))
+        l3.add_widget(_cell(f"{cur_price:,}", "", _c("#333"), col=COL_A))
+        l3.add_widget(_cell(format_signed(day_diff), f"({day_pct:+.2f}%)",
+                               _c(sign_color(day_diff)), col=COL_B, bold=name_bold))
+        l3.add_widget(_cell(format_signed(inst) if inst else "", "",
+                               _c(sign_color(inst)) if inst else _c("#aaa"),
+                               col=COL_C))
         box.add_widget(l3)
+
+        # ─── 행 4: 목표가(%) | 피크가(%) | 연기금
+        l4 = BoxLayout(orientation="horizontal", size_hint_y=None,
+                        height=sp(22), spacing=sp(4))
+        if target:
+            l4.add_widget(_cell(f"{target:,}", f"({target_gap_pct:+.2f}%)",
+                                  _c(sign_color(target_gap_pct)), col=COL_A))
+        else:
+            l4.add_widget(_cell("", "", _c("#aaa"), col=COL_A))
+        if peak:
+            peak_c = _c(sign_color(peak_gap_pct) if peak_gap_pct < 0 else "#888")
+            l4.add_widget(_cell(f"{int(peak):,}", f"({peak_gap_pct:+.2f}%)",
+                                  peak_c, col=COL_B))
+        else:
+            l4.add_widget(_cell("", "", _c("#aaa"), col=COL_B))
+        l4.add_widget(_cell(format_signed(pension) if pension else "", "",
+                               _c(sign_color(pension)) if pension else _c("#aaa"),
+                               col=COL_C))
+        box.add_widget(l4)
         return box
 
     def _build_total_row(self, invested, current, yesterday):
@@ -624,18 +643,17 @@ class TabHoldings(BoxLayout):
                         height=sp(24), spacing=sp(4))
         l1.add_widget(Label(
             text="매수가 합계", bold=True, font_size=FONT_MD,
-            color=rgba("#000"), size_hint_x=COL_NAME, halign="left",
+            color=rgba("#000"), size_hint_x=COL_A, halign="left",
             valign="middle", text_size=(None, sp(24))))
         l1.add_widget(Label(
             text=f"{int(invested):,}원", bold=True, font_size=FONT_MD,
-            color=rgba("#222"), size_hint_x=COL_PRICE, halign="right",
+            color=rgba("#222"), size_hint_x=COL_B, halign="right",
             valign="middle", text_size=(None, sp(24))))
         l1.add_widget(Label(
             text=f"{format_signed(pnl)} ({pnl_pct:+.2f}%)",
             bold=True, font_size=FONT_MD,
-            color=rgba(sign_color(pnl)), size_hint_x=COL_PNL, halign="right",
+            color=rgba(sign_color(pnl)), size_hint_x=COL_C, halign="right",
             valign="middle", text_size=(None, sp(24))))
-        l1.add_widget(BoxLayout(size_hint_x=COL_PEAK))
         box.add_widget(l1)
 
         # 행 2: 현재가 합계 | current | 전일대비(%)
@@ -643,17 +661,16 @@ class TabHoldings(BoxLayout):
                         height=sp(24), spacing=sp(4))
         l2.add_widget(Label(
             text="현재가 합계", bold=True, font_size=FONT_MD,
-            color=rgba("#000"), size_hint_x=COL_NAME, halign="left",
+            color=rgba("#000"), size_hint_x=COL_A, halign="left",
             valign="middle", text_size=(None, sp(24))))
         l2.add_widget(Label(
             text=f"{int(current):,}원", bold=True, font_size=FONT_MD,
-            color=rgba("#222"), size_hint_x=COL_PRICE, halign="right",
+            color=rgba("#222"), size_hint_x=COL_B, halign="right",
             valign="middle", text_size=(None, sp(24))))
         l2.add_widget(Label(
             text=f"{format_signed(day_diff)} ({day_pct:+.2f}%)",
             bold=True, font_size=FONT_MD,
-            color=rgba(sign_color(day_diff)), size_hint_x=COL_PNL, halign="right",
+            color=rgba(sign_color(day_diff)), size_hint_x=COL_C, halign="right",
             valign="middle", text_size=(None, sp(24))))
-        l2.add_widget(BoxLayout(size_hint_x=COL_PEAK))
         box.add_widget(l2)
         return box

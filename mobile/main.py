@@ -58,12 +58,18 @@ try:
 
     SCRIPT_DIR = Path(__file__).resolve().parent
 
-    # 한글 폰트 등록
-    _KR_FONT = SCRIPT_DIR / "assets" / "NotoSansKR.ttf"
-    if _KR_FONT.exists():
-        LabelBase.register(name="Roboto",
-                            fn_regular=str(_KR_FONT),
-                            fn_bold=str(_KR_FONT))
+    # 한글 폰트 등록 — 나눔고딕 Regular + Bold (없으면 NotoSansKR fallback)
+    _KR_FONT_REG = SCRIPT_DIR / "assets" / "NanumGothic.ttf"
+    _KR_FONT_BOLD = SCRIPT_DIR / "assets" / "NanumGothicBold.ttf"
+    if not _KR_FONT_REG.exists():
+        _KR_FONT_REG = SCRIPT_DIR / "assets" / "NotoSansKR.ttf"
+        _KR_FONT_BOLD = _KR_FONT_REG
+    if _KR_FONT_REG.exists():
+        LabelBase.register(
+            name="Roboto",
+            fn_regular=str(_KR_FONT_REG),
+            fn_bold=str(_KR_FONT_BOLD if _KR_FONT_BOLD.exists()
+                         else _KR_FONT_REG))
 
     from data_service import load_holdings
     from ui.tab_us import TabUS

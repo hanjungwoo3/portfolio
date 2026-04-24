@@ -1,8 +1,10 @@
-"""공통 팝업 다이얼로그 — 보유/관심 추가·삭제"""
+"""공통 팝업 다이얼로그 — 보유/관심 추가·삭제 + JSON 내보내기/가져오기"""
+import json
 from datetime import datetime
 from pathlib import Path
 
 from kivy.clock import mainthread
+from kivy.core.clipboard import Clipboard
 from kivy.metrics import sp
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
@@ -293,3 +295,188 @@ def show_delete_watch(holdings_data: dict, on_done):
     def _is_watch(s):
         return s.get("account") == "관심"
     _show_delete(holdings_data, on_done, _is_watch, "관심 종목 삭제")
+
+
+# ─── JSON 일괄 관리 ────────────────────────────────────────────
+def show_json_menu(holdings_data: dict, on_done):
+    """JSON 관리 메뉴 — 내보내기/가져오기 선택."""
+    content = BoxLayout(orientation="vertical", spacing=sp(8),
+                         padding=sp(14))
+    content.add_widget(_label("JSON 일괄 관리",
+                                bold=True, size=sp(16)))
+
+    popup = Popup(title="", separator_height=0, content=content,
+                   size_hint=(0.82, None), height=sp(240),
+                   auto_dismiss=True)
+
+    def _export(_):
+        popup.dismiss()
+        show_export_json(holdings_data)
+
+    def _import(_):
+        popup.dismiss()
+        show_import_json(holdings_data, on_done)
+
+    content.add_widget(_btn("↑ 내보내기 (JSON 복사/저장)",
+                              _export, bg=(0.2, 0.5, 0.9, 1)))
+    content.add_widget(_btn("↓ 가져오기 (JSON 붙여넣기)",
+                              _import, bg=(0.35, 0.65, 0.3, 1)))
+    content.add_widget(_btn("취소", lambda *_: popup.dismiss(),
+                              bg=(0.5, 0.5, 0.5, 1)))
+    popup.open()
+
+
+def _is_syncable(stock: dict) -> bool:
+    """sync 대상: 일반 보유(account 없음) + 관심 주식(account=="관심")
+    제외: 관심ETF / 퇴직연금 등 기타 계정."""
+    acc = stock.get("account") or ""
+    return acc in ("", "관심")
+
+
+def show_export_json(holdings_data: dict):
+    """보유 + 관심 주식만 JSON 으로 표시 + 복사/파일 저장
+    (관심ETF / 퇴직연금 제외)."""
+    content = BoxLayout(orientation="vertical", spacing=sp(6),
+                         padding=sp(10))
+    content.add_widget(_label("JSON 내보내기",
+                                bold=True, size=sp(16)))
+
+    filtered = [s for s in holdings_data.get("holdings", [])
+                if _is_syncable(s)]
+    export_data = {"holdings": filtered}
+    json_text = json.dumps(export_data, ensure_ascii=False, indent=2)
+
+    text_view = TextInput(
+        text=json_text, readonly=True, multiline=True,
+        font_size=sp(11), background_color=(0.97, 0.97, 0.97, 1),
+        foreground_color=(0.15, 0.15, 0.15, 1))
+    content.add_widget(text_view)
+
+    popup = Popup(title="", separator_height=0, content=content,
+                   size_hint=(0.95, 0.9), auto_dismiss=False)
+
+    def _copy(_):
+        Clipboard.copy(json_text)
+        _toast("클립보드에 복사됨")
+
+    def _save(_):
+        try:
+            # Android 우선, 없으면 Mac/Linux Downloads
+            if Path("/storage/emulated/0/Download").exists():
+                base = Path("/storage/emulated/0/Download")
+            else:
+                base = Path.home() / "Downloads"
+            base.mkdir(parents=True, exist_ok=True)
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            fpath = base / f"portfolio_{ts}.json"
+            fpath.write_text(json_text, encoding="utf-8")
+            _toast(f"저장: {fpath}")
+        except Exception as e:
+            _toast(f"저장 실패: {e}")
+
+    btn_row = BoxLayout(orientation="horizontal", spacing=sp(6),
+                         size_hint_y=None, height=sp(44))
+    btn_row.add_widget(_btn("닫기", lambda *_: popup.dismiss(),
+                              bg=(0.5, 0.5, 0.5, 1)))
+    btn_row.add_widget(_btn("파일 저장", _save,
+                              bg=(0.35, 0.65, 0.3, 1)))
+    btn_row.add_widget(_btn("복사", _copy, bg=(0.2, 0.5, 0.9, 1)))
+    content.add_widget(btn_row)
+    popup.open()
+
+
+def show_import_json(holdings_data: dict, on_done):
+    """TextInput 에서 JSON paste → 검증 → 교체 (2-step 확인)."""
+    content = BoxLayout(orientation="vertical", spacing=sp(6),
+                         padding=sp(10))
+    content.add_widget(_label("JSON 가져오기",
+                                bold=True, size=sp(16)))
+    content.add_widget(_label(
+        "전체 holdings.json 내용을 붙여넣으세요",
+        size=sp(11), color=(0.45, 0.45, 0.45, 1)))
+
+    text_input = TextInput(
+        text="", multiline=True, font_size=sp(11),
+        hint_text='{\n  "holdings": [\n    { "ticker": "...", ... }\n  ]\n}')
+    content.add_widget(text_input)
+
+    popup = Popup(title="", separator_height=0, content=content,
+                   size_hint=(0.95, 0.9), auto_dismiss=False)
+
+    def _paste_clipboard(_):
+        t = Clipboard.paste() or ""
+        text_input.text = t
+
+    def _apply(_):
+        raw = text_input.text.strip()
+        if not raw:
+            _toast("JSON 내용이 비어있음")
+            return
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as e:
+            _toast(f"JSON 파싱 실패: {str(e)[:40]}")
+            return
+        if not isinstance(data, dict) or "holdings" not in data:
+            _toast("'holdings' 키가 없음")
+            return
+        if not isinstance(data["holdings"], list):
+            _toast("'holdings' 는 배열이어야 함")
+            return
+        for i, s in enumerate(data["holdings"]):
+            if not isinstance(s, dict) or not s.get("ticker"):
+                _toast(f"{i}번 항목에 ticker 누락")
+                return
+        n_new = len(data["holdings"])
+        n_old = len(holdings_data.get("holdings", []))
+        _confirm_replace(n_old, n_new,
+                          lambda: _do_apply(data, popup, on_done))
+
+    def _do_apply(new_data, outer_popup, cb):
+        # 기존 ETF/퇴직연금 등 non-syncable 항목 보존
+        preserved = [s for s in holdings_data.get("holdings", [])
+                     if not _is_syncable(s)]
+        # 유입되는 데이터에서도 혹시 모를 ETF/퇴직연금은 버림
+        incoming = [s for s in new_data["holdings"] if _is_syncable(s)]
+        holdings_data["holdings"] = preserved + incoming
+        save_holdings(HOLDINGS_PATH, holdings_data)
+        outer_popup.dismiss()
+        cb()
+        _toast(f"{len(incoming)}개 적용 (보존 {len(preserved)}개)")
+
+    btn_row = BoxLayout(orientation="horizontal", spacing=sp(6),
+                         size_hint_y=None, height=sp(44))
+    btn_row.add_widget(_btn("취소", lambda *_: popup.dismiss(),
+                              bg=(0.5, 0.5, 0.5, 1)))
+    btn_row.add_widget(_btn("붙여넣기", _paste_clipboard,
+                              bg=(0.3, 0.6, 0.85, 1)))
+    btn_row.add_widget(_btn("적용", _apply, bg=(0.8, 0.4, 0.2, 1)))
+    content.add_widget(btn_row)
+    popup.open()
+
+
+def _confirm_replace(n_old: int, n_new: int, on_confirm):
+    """교체 전 경고 팝업."""
+    content = BoxLayout(orientation="vertical", spacing=sp(8),
+                         padding=sp(16))
+    content.add_widget(_label("! 주의", bold=True, size=sp(16),
+                                color=(0.8, 0.3, 0.2, 1)))
+    content.add_widget(_label(
+        f"현재 {n_old}개 종목이 삭제되고 {n_new}개로 교체됩니다",
+        size=sp(13), color=(0.3, 0.3, 0.3, 1)))
+
+    popup = Popup(title="", separator_height=0, content=content,
+                   size_hint=(0.85, None), height=sp(190),
+                   auto_dismiss=False)
+
+    def _yes(_):
+        popup.dismiss()
+        on_confirm()
+
+    btn_row = BoxLayout(orientation="horizontal", spacing=sp(8),
+                         size_hint_y=None, height=sp(44))
+    btn_row.add_widget(_btn("취소", lambda *_: popup.dismiss(),
+                              bg=(0.5, 0.5, 0.5, 1)))
+    btn_row.add_widget(_btn("진행", _yes, bg=(0.8, 0.3, 0.3, 1)))
+    content.add_widget(btn_row)
+    popup.open()

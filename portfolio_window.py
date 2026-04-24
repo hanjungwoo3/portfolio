@@ -86,6 +86,33 @@ def fetch_stock_sector(ticker: str) -> str:
         return ""
 
 
+def fetch_stock_warning(ticker: str) -> str:
+    """네이버 금융에서 투자경고/주의/위험/단기과열/관리종목/거래정지 스크래핑
+    Returns: 2글자 축약 ("주의", "경고", "위험", "과열", "관리", "정지") 또는 ""
+    """
+    try:
+        r = requests.get(
+            f"https://finance.naver.com/item/main.naver?code={ticker}",
+            headers={"User-Agent": USER_AGENT}, timeout=5,
+        )
+        soup = BeautifulSoup(r.text, "html.parser")
+        texts = []
+        for em in soup.select("em.warning, em.caution, em.danger, em.notice"):
+            t = em.get_text(strip=True)
+            if t:
+                texts.append(t)
+        # 우선순위: 위험 > 관리 > 정지 > 경고 > 과열 > 주의
+        full = " ".join(texts)
+        for full_tag, short in (("투자위험", "위험"), ("관리종목", "관리"),
+                                 ("거래정지", "정지"), ("투자경고", "경고"),
+                                 ("단기과열", "과열"), ("투자주의", "주의")):
+            if full_tag in full:
+                return short
+        return ""
+    except Exception:
+        return ""
+
+
 def fetch_target_consensus(ticker: str) -> dict | None:
     """네이버 금융에서 애널리스트 목표주가 / 투자의견 스크래핑
     Returns: {'target': int, 'opinion': str, 'score': float} or None
@@ -346,20 +373,35 @@ def fetch_us_indices_with_futures() -> list:
         pct = (close - prev) / prev * 100 if prev else 0
 
         fut_pct = None
+        fut_price = None
         if fut:
             fclose, fprev = quotes.get(fut, (None, None))
             if fclose is not None and fprev:
                 fut_pct = (fclose - fprev) / fprev * 100
+                fut_price = fclose
 
         icon, icon_color, impact_text = _impact(pct, fut_pct, direction)
         out.append({
             "symbol": cash,
             "fut_symbol": fut,
+            "fut_price": fut_price,
             "name": name, "note": note, "price": close, "pct": pct,
             "fut_pct": fut_pct, "tier": tier, "sector": sector,
             "impact": impact_text, "icon": icon, "icon_color": icon_color,
         })
     return out
+
+
+# 선물 심볼 → 풀네임 매핑
+FUT_FULL_NAME = {
+    "ES=F": "S&P 500 선물",
+    "NQ=F": "나스닥 선물",
+    "SOX=F": "SOX 선물",
+    "ZN=F": "미국 10Y 선물",
+    "YM=F": "다우 선물",
+    "RTY=F": "러셀 선물",
+    "NKD=F": "니케이 선물",
+}
 
 
 def resolve_us_indicator_url(symbol: str) -> str:
@@ -680,6 +722,8 @@ class PortfolioWindow:
         self.consensus_cache_ts = 0  # 마지막 애널리스트 컨센서스 조회 시각
         self.sector_cache = {}  # {ticker: str} 업종/섹터
         self.sector_cache_ts = 0  # 마지막 섹터 조회 시각
+        self.warning_cache = {}  # {ticker: str} 투자경고 축약 ("경고"/"주의"/...)
+        self.warning_cache_ts = 0  # 마지막 경고 조회 시각
         self.nxt_cache = {}  # {ticker: bool} NXT 지원 여부
         self.nxt_cache_ts = 0  # 마지막 NXT 조회 시각
         self.us_indices = []  # 미국 증시 데이터
@@ -875,6 +919,14 @@ class PortfolioWindow:
             command=self._toggle_maximize,
         ).pack(side=tk.LEFT, padx=3)
 
+        # 장마감 종목 fade (💤) on/off — 기본 켜짐
+        self.fade_sleeping_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            bottom, text="장마감",
+            variable=self.fade_sleeping_var,
+            command=self.refresh,
+        ).pack(side=tk.LEFT, padx=3)
+
         ttk.Button(bottom, text="💼 보유 추가",
                    command=self._add_holding).pack(side=tk.LEFT, padx=(6, 2))
         ttk.Button(bottom, text="💼 보유 삭제",
@@ -883,6 +935,11 @@ class PortfolioWindow:
                    command=self._add_watchlist).pack(side=tk.LEFT, padx=(6, 2))
         ttk.Button(bottom, text="⭐ 관심 삭제",
                    command=self._prompt_delete_watchlist).pack(side=tk.LEFT, padx=2)
+
+        ttk.Button(bottom, text="📤 JSON 내보내기",
+                   command=self._export_holdings_json).pack(side=tk.LEFT, padx=(6, 2))
+        ttk.Button(bottom, text="📥 JSON 가져오기",
+                   command=self._import_holdings_json).pack(side=tk.LEFT, padx=2)
 
         tk.Label(bottom, text="투명도", font=("SF Pro", 9), foreground="#666").pack(side=tk.LEFT, padx=(8, 2))
         self.alpha_scale = tk.Scale(
@@ -1438,6 +1495,140 @@ class PortfolioWindow:
         save_json(HOLDINGS_PATH, self.holdings_data)
         self.reload_data()
 
+    # ─── JSON 내보내기/가져오기 (모바일과 공유) ────────────────
+    @staticmethod
+    def _is_syncable(stock: dict) -> bool:
+        """sync 대상: 일반 보유 + 관심 주식 (관심ETF / 퇴직연금 제외)."""
+        acc = stock.get("account") or ""
+        return acc in ("", "관심")
+
+    def _export_holdings_json(self):
+        """보유 + 관심 주식만 팝업으로 표시 + 복사/파일저장 (ETF/퇴직연금 제외)."""
+        import json as _json
+        from tkinter import filedialog, messagebox
+        filtered = [s for s in self.holdings_data.get("holdings", [])
+                    if self._is_syncable(s)]
+        export_data = {"holdings": filtered}
+        text = _json.dumps(export_data, ensure_ascii=False, indent=2)
+
+        dlg = tk.Toplevel(self.root)
+        dlg.title("📤 JSON 내보내기")
+        dlg.geometry("700x500")
+
+        txt = tk.Text(dlg, wrap="none", font=("SF Mono", 11))
+        txt.insert("1.0", text)
+        txt.config(state="disabled")
+        txt.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
+
+        btn_row = ttk.Frame(dlg)
+        btn_row.pack(fill=tk.X, padx=6, pady=(0, 6))
+
+        def _copy():
+            self.root.clipboard_clear()
+            self.root.clipboard_append(text)
+            messagebox.showinfo("복사", "클립보드에 복사됨", parent=dlg)
+
+        def _save_file():
+            from pathlib import Path as _P
+            default = f"portfolio_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            initial = str(_P.home() / "Downloads")
+            fpath = filedialog.asksaveasfilename(
+                parent=dlg, initialdir=initial,
+                initialfile=default, defaultextension=".json",
+                filetypes=[("JSON", "*.json")])
+            if fpath:
+                _P(fpath).write_text(text, encoding="utf-8")
+                messagebox.showinfo("저장", f"{fpath} 에 저장됨", parent=dlg)
+
+        ttk.Button(btn_row, text="닫기", command=dlg.destroy).pack(side=tk.RIGHT, padx=2)
+        ttk.Button(btn_row, text="📋 복사", command=_copy).pack(side=tk.RIGHT, padx=2)
+        ttk.Button(btn_row, text="💾 파일 저장", command=_save_file).pack(side=tk.RIGHT, padx=2)
+
+    def _import_holdings_json(self):
+        """파일 선택 or paste → 검증 → 교체."""
+        import json as _json
+        from tkinter import filedialog, messagebox
+
+        dlg = tk.Toplevel(self.root)
+        dlg.title("📥 JSON 가져오기")
+        dlg.geometry("700x500")
+
+        ttk.Label(dlg, text="전체 holdings.json 내용을 붙여넣거나 파일을 선택하세요",
+                   foreground="#666").pack(anchor="w", padx=6, pady=(6, 2))
+
+        txt = tk.Text(dlg, wrap="none", font=("SF Mono", 11))
+        txt.pack(fill=tk.BOTH, expand=True, padx=6, pady=(0, 6))
+
+        def _pick_file():
+            from pathlib import Path as _P
+            fpath = filedialog.askopenfilename(
+                parent=dlg, initialdir=str(_P.home() / "Downloads"),
+                filetypes=[("JSON", "*.json"), ("All", "*.*")])
+            if fpath:
+                try:
+                    content = _P(fpath).read_text(encoding="utf-8")
+                    txt.delete("1.0", "end")
+                    txt.insert("1.0", content)
+                except Exception as e:
+                    messagebox.showerror("읽기 실패", str(e), parent=dlg)
+
+        def _paste():
+            try:
+                content = self.root.clipboard_get()
+                txt.delete("1.0", "end")
+                txt.insert("1.0", content)
+            except Exception:
+                messagebox.showwarning("클립보드", "클립보드에 내용 없음", parent=dlg)
+
+        def _apply():
+            raw = txt.get("1.0", "end").strip()
+            if not raw:
+                messagebox.showwarning("입력 없음", "JSON 내용을 입력하세요", parent=dlg)
+                return
+            try:
+                data = _json.loads(raw)
+            except _json.JSONDecodeError as e:
+                messagebox.showerror("JSON 파싱 실패", str(e), parent=dlg)
+                return
+            if not isinstance(data, dict) or "holdings" not in data:
+                messagebox.showerror("형식 오류", "'holdings' 키가 없습니다", parent=dlg)
+                return
+            if not isinstance(data["holdings"], list):
+                messagebox.showerror("형식 오류", "'holdings' 는 배열이어야 함", parent=dlg)
+                return
+            for i, s in enumerate(data["holdings"]):
+                if not isinstance(s, dict) or not s.get("ticker"):
+                    messagebox.showerror("형식 오류",
+                                          f"{i}번 항목에 ticker 누락", parent=dlg)
+                    return
+            n_old = len(self.holdings_data.get("holdings", []))
+            n_new = len(data["holdings"])
+            if not messagebox.askyesno(
+                    "확인",
+                    f"현재 {n_old}개 종목이 삭제되고 {n_new}개로 교체됩니다.\n진행할까요?",
+                    parent=dlg):
+                return
+            # 기존 ETF/퇴직연금 보존 + 유입은 보유/관심 주식만 적용
+            preserved = [s for s in self.holdings_data.get("holdings", [])
+                         if not self._is_syncable(s)]
+            incoming = [s for s in data["holdings"]
+                        if self._is_syncable(s)]
+            self.holdings_data["holdings"] = preserved + incoming
+            save_json(HOLDINGS_PATH, self.holdings_data)
+            dlg.destroy()
+            self.reload_data()
+            messagebox.showinfo(
+                "완료",
+                f"{len(incoming)}개 적용됨 (ETF/퇴직연금 {len(preserved)}개 보존)",
+                parent=self.root)
+
+        btn_row = ttk.Frame(dlg)
+        btn_row.pack(fill=tk.X, padx=6, pady=(0, 6))
+        ttk.Button(btn_row, text="취소", command=dlg.destroy).pack(side=tk.RIGHT, padx=2)
+        ttk.Button(btn_row, text="적용", command=_apply).pack(side=tk.RIGHT, padx=2)
+        ttk.Button(btn_row, text="📋 붙여넣기", command=_paste).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn_row, text="📁 파일 선택", command=_pick_file).pack(side=tk.LEFT, padx=2)
+
     def _on_quit(self):
         """창 X 버튼 / 종료 버튼 / SIGTERM → after 예약 취소 + 프로세스 종료"""
         for attr in ("_refresh_job", "_countdown_job"):
@@ -1730,10 +1921,11 @@ end tell
         toss = fetch_toss_prices_batch(all_etf_tickers) if all_etf_tickers else {}
         holdings_by_ticker = {s["ticker"]: s for s in self.holdings}
 
-        # 3 컬럼: 섹터명(고정) | 선행지표(content 크기) | ETF(남는 공간)
+        # 4 컬럼: 섹터명 | 현물 | 선물 | ETF
         parent.grid_columnconfigure(0, weight=0, minsize=140)
         parent.grid_columnconfigure(1, weight=0)
-        parent.grid_columnconfigure(2, weight=1)
+        parent.grid_columnconfigure(2, weight=0, minsize=170)
+        parent.grid_columnconfigure(3, weight=1)
 
         for row_idx, (sector_key, sector_label) in enumerate(sectors):
             indices = by_sector.get(sector_key, [])
@@ -1748,7 +1940,7 @@ end tell
                      bg=hdr_bg, fg=hdr_fg, anchor="w",
                      padx=8, pady=5).pack(fill=tk.BOTH, expand=True)
 
-            # 선행지표 셀 (테이블 정렬: name | price | pct | note)
+            # 현물 셀 (테이블 정렬: name | price | pct | note)
             ind_cell = tk.Frame(parent, bg=bg,
                                 highlightbackground="#e0e0e0", highlightthickness=1)
             ind_cell.grid(row=row_idx, column=1, sticky="nsew")
@@ -1756,18 +1948,29 @@ end tell
             ind_inner.pack(fill=tk.BOTH, expand=True, padx=4, pady=3)
             ind_inner.grid_columnconfigure(0, minsize=120)  # name
             ind_inner.grid_columnconfigure(1, minsize=75)   # price
-            ind_inner.grid_columnconfigure(2, minsize=95)   # pct (+선물)
-            # note col: weight 없음 — content 크기만, 셀 전체 stretch 방지
+            ind_inner.grid_columnconfigure(2, minsize=65)   # pct
             for i, idx in enumerate(indices):
                 self._render_indicator_inline(ind_inner, idx, bg, faded, row_i=i)
+
+            # 선물 셀 (현물과 같은 row 에 맞춤, 없으면 빈 공간)
+            fut_cell = tk.Frame(parent, bg=bg,
+                                 highlightbackground="#e0e0e0", highlightthickness=1)
+            fut_cell.grid(row=row_idx, column=2, sticky="nsew")
+            fut_inner = tk.Frame(fut_cell, bg=bg)
+            fut_inner.pack(fill=tk.BOTH, expand=True, padx=4, pady=3)
+            fut_inner.grid_columnconfigure(0, minsize=100)  # name
+            fut_inner.grid_columnconfigure(1, minsize=75)   # price
+            fut_inner.grid_columnconfigure(2, minsize=60)   # pct
+            for i, idx in enumerate(indices):
+                self._render_futures_inline(fut_inner, idx, bg, faded, row_i=i)
 
             # 관심 ETF 셀 (테이블 정렬: name | price | pct)
             etf_cell = tk.Frame(parent, bg=bg,
                                 highlightbackground="#e0e0e0", highlightthickness=1)
-            etf_cell.grid(row=row_idx, column=2, sticky="nsew")
+            etf_cell.grid(row=row_idx, column=3, sticky="nsew")
             etf_inner = tk.Frame(etf_cell, bg=bg)
             etf_inner.pack(fill=tk.BOTH, expand=True, padx=4, pady=3)
-            etf_inner.grid_columnconfigure(0, minsize=150)  # name
+            etf_inner.grid_columnconfigure(0, minsize=220)  # name
             etf_inner.grid_columnconfigure(1, minsize=80)   # price
             etf_inner.grid_columnconfigure(2, minsize=60)   # pct
             etf_inner.grid_columnconfigure(3, weight=1)     # trailing spacer
@@ -1787,9 +1990,6 @@ end tell
         pct_color = sign_color(pct)
         if faded:
             pct_color = self._fade_hex(pct_color, 0.7)
-
-        fut_pct = idx.get("fut_pct")
-        fut_txt = f" ({fut_pct:+.2f})" if fut_pct is not None else ""
 
         symbol = idx.get("symbol", "")
         url = resolve_us_indicator_url(symbol)
@@ -1813,7 +2013,7 @@ end tell
                              bg=bg, fg=price_fg, anchor="e",
                              cursor="pointinghand")
         lbl_price.grid(row=row_i, column=1, sticky="e", padx=(4, 0), pady=1)
-        lbl_pct = tk.Label(parent, text=f"{pct:+.2f}%{fut_txt}",
+        lbl_pct = tk.Label(parent, text=f"{pct:+.2f}%",
                            font=("SF Mono", 9),
                            bg=bg, fg=pct_color, anchor="e",
                            cursor="pointinghand")
@@ -1829,6 +2029,46 @@ end tell
         if lbl_note is not None:
             widgets.append(lbl_note)
         for w in widgets:
+            w.bind("<Button-1>", lambda e, u=url: self._open_in_existing_tab(u))
+
+    def _render_futures_inline(self, parent, idx: dict, bg: str, faded: bool,
+                                row_i: int = 0):
+        """선물 셀 — [풀네임 (심볼) | price | pct%]. 선물 없으면 빈 행"""
+        fut_symbol = idx.get("fut_symbol") or ""
+        fut_pct = idx.get("fut_pct")
+        fut_price = idx.get("fut_price")
+        if not fut_symbol or fut_pct is None:
+            return  # 빈 행 (그리드가 자연스레 공백)
+
+        full_name = FUT_FULL_NAME.get(fut_symbol, fut_symbol)
+        disp_name = f"{full_name} ({fut_symbol})"
+
+        pct_color = sign_color(fut_pct)
+        if faded:
+            pct_color = self._fade_hex(pct_color, 0.7)
+
+        name_fg = self._fade_hex("#222", 0.7) if faded else "#222"
+        price_fg = self._fade_hex(name_fg, 0.3) if faded else "#555"
+
+        price_txt = f"{fut_price:,.2f}" if fut_price else "-"
+
+        url = resolve_us_indicator_url(fut_symbol)
+
+        lbl_name = tk.Label(parent, text=disp_name, font=("SF Mono", 9),
+                            bg=bg, fg=name_fg, anchor="w",
+                            cursor="pointinghand")
+        lbl_name.grid(row=row_i, column=0, sticky="w", pady=1)
+        lbl_price = tk.Label(parent, text=price_txt, font=("SF Mono", 9),
+                             bg=bg, fg=price_fg, anchor="e",
+                             cursor="pointinghand")
+        lbl_price.grid(row=row_i, column=1, sticky="e", padx=(4, 0), pady=1)
+        lbl_pct = tk.Label(parent, text=f"{fut_pct:+.2f}%",
+                           font=("SF Mono", 9),
+                           bg=bg, fg=pct_color, anchor="e",
+                           cursor="pointinghand")
+        lbl_pct.grid(row=row_i, column=2, sticky="e", padx=(4, 0), pady=1)
+
+        for w in (lbl_name, lbl_price, lbl_pct):
             w.bind("<Button-1>", lambda e, u=url: self._open_in_existing_tab(u))
 
     def _render_etf_inline(self, parent, stock: dict, price_data: dict,
@@ -1990,6 +2230,22 @@ end tell
                     self.sector_cache[t] = r
         self.sector_cache_ts = now
 
+    def _refresh_warning_cache_if_needed(self):
+        """투자경고 갱신 — 6시간 TTL (경고 상태는 하루에 몇 번 바뀔 수 있음)"""
+        import time as _t
+        now = _t.time()
+        if now - self.warning_cache_ts < 6 * 3600 and self.warning_cache:
+            return
+        tickers = [s["ticker"] for s in self.holdings
+                   if s["ticker"].isdigit() and len(s["ticker"]) == 6]
+        if not tickers:
+            return
+        with ThreadPoolExecutor(max_workers=min(len(tickers), 8)) as pool:
+            results = pool.map(fetch_stock_warning, tickers)
+            for t, r in zip(tickers, results):
+                self.warning_cache[t] = r  # "" 도 저장해서 재조회 방지
+        self.warning_cache_ts = now
+
     def _refresh_consensus_cache_if_needed(self):
         """애널리스트 컨센서스 갱신 — 1시간 TTL (거의 매일 단위 업데이트). KRX 6자리만"""
         import time as _t
@@ -2071,6 +2327,10 @@ end tell
                 cells_dict.clear()
                 entry["cols_sig"] = cols_sig
 
+            # 투자경고 뱃지 색상 맵 (모듈 레벨 이상 이동 가능하지만 클로저 내 사용)
+            _WARN_BG = {"주의": "#f39c12", "경고": "#e67e22", "위험": "#c0392b",
+                         "과열": "#e67e22", "관리": "#8b0000", "정지": "#666666"}
+
             def _apply_cell(lbl, cell, key, is_top, align):
                 """cell = (text, fg, [bg, bold, [fill_mode]])
                 fill_mode: "pill"(기본) = 텍스트 폭만 bg / "full" = 전체 셀 bg
@@ -2096,11 +2356,22 @@ end tell
                            padx=(6 if is_pill else 3),
                            pady=(1 if is_pill else 0),
                            borderwidth=0)
-                # 패킹 모드: pill (텍스트 폭) / full (셀 전체)
+                # 종목명 뒤 투자경고 pill 여부 판정
+                warn_text = ""
+                if is_top and key == "name":
+                    warn_text = self.warning_cache.get(ticker, "") or ""
+                # 패킹 모드: pill (텍스트 폭) / full (셀 전체) / pill_warn (name + 경고)
                 mode_key = "top_mode" if is_top else "bot_mode"
                 current_mode = pair.get(mode_key)
-                target_mode = "pill" if is_pill else "full"
-                if current_mode != target_mode:
+                if warn_text:
+                    target_mode = "pill_warn"
+                elif is_pill:
+                    target_mode = "pill"
+                else:
+                    target_mode = "full"
+                # name 컬럼은 top_wrap 내부에 side=LEFT 로 배치되어 있어 pack 전환 불필요
+                is_name_top = is_top and key == "name"
+                if current_mode != target_mode and not is_name_top:
                     lbl.pack_forget()
                     pack_before = pair["bot"] if (is_top and pair.get("bot") is not None
                                                   and pair["bot"].winfo_exists()) else None
@@ -2119,6 +2390,34 @@ end tell
                         else:
                             lbl.pack(fill=tk.X)
                     pair[mode_key] = target_mode
+                elif is_name_top and current_mode != target_mode:
+                    # name: pill 일 땐 텍스트 폭만, full 일 땐 전체 채움
+                    lbl.pack_forget()
+                    if target_mode in ("pill", "pill_warn"):
+                        lbl.pack(side=tk.LEFT, padx=3, pady=1)
+                    else:
+                        lbl.pack(side=tk.LEFT, fill=tk.X, expand=True)
+                    pair[mode_key] = target_mode
+                # 경고 pill 관리 (name top 전용) — top_wrap 내부에 sibling 으로
+                if is_name_top:
+                    warn_lbl = pair.get("warn")
+                    top_wrap = pair.get("top_wrap")
+                    if warn_text and top_wrap is not None:
+                        warn_bg = _WARN_BG.get(warn_text, "#666")
+                        warn_fg = "white"
+                        if faded:
+                            warn_bg = self._fade_hex(warn_bg, 0.85)
+                        if warn_lbl is None or not warn_lbl.winfo_exists():
+                            warn_lbl = tk.Label(top_wrap, borderwidth=0,
+                                                 padx=4, pady=1)
+                            pair["warn"] = warn_lbl
+                        warn_lbl.config(text=warn_text, fg=warn_fg, bg=warn_bg,
+                                         font=("SF Mono", 9, "bold"))
+                        if not warn_lbl.winfo_ismapped():
+                            warn_lbl.pack(side=tk.LEFT, padx=(2, 0), pady=1)
+                    else:
+                        if warn_lbl is not None and warn_lbl.winfo_exists():
+                            warn_lbl.pack_forget()
 
             # 모든 bot_key=None 이면 단일-라인 모드 (짧은 행 높이)
             single_line = all(c[1] is None for c in cols_info) if cols_info else False
@@ -2138,17 +2437,26 @@ end tell
                     pf = tk.Frame(frame, bg=row_bg, width=pw, height=row_h)
                     pf.grid(row=0, column=col_idx, sticky="nsew")
                     pf.pack_propagate(False)
-                    # 세로 중앙 정렬을 위한 anchor (오른쪽 정렬이면 "e" → Label 내 text 는 중앙에 오도록)
-                    # Label 의 anchor 속성은 text 위치이므로 세로 중앙은 "e"/"w"/"center"
-                    top_lbl = tk.Label(pf, text="", font=("SF Mono", 10),
-                                       bg=row_bg, fg="#222",
-                                       anchor=anchor, padx=3, pady=0,
-                                       borderwidth=0)
-                    if is_tall_single:
-                        # 2줄 높이 행 내에서 이 single 컬럼만 세로 중앙
-                        top_lbl.pack(fill=tk.BOTH, expand=True)
+                    # 종목명 컬럼은 경고 pill 이 옆에 붙을 수 있어 top_wrap Frame 으로 감쌈
+                    # (sibling pill 과 bot(sector) 레이아웃 충돌 방지)
+                    top_wrap = None
+                    if top_key == "name":
+                        top_wrap = tk.Frame(pf, bg=row_bg)
+                        top_wrap.pack(fill=tk.X)
+                        top_lbl = tk.Label(top_wrap, text="", font=("SF Mono", 10),
+                                           bg=row_bg, fg="#222",
+                                           anchor=anchor, padx=3, pady=0,
+                                           borderwidth=0)
+                        top_lbl.pack(side=tk.LEFT, fill=tk.X, expand=True)
                     else:
-                        top_lbl.pack(fill=tk.X)
+                        top_lbl = tk.Label(pf, text="", font=("SF Mono", 10),
+                                           bg=row_bg, fg="#222",
+                                           anchor=anchor, padx=3, pady=0,
+                                           borderwidth=0)
+                        if is_tall_single:
+                            top_lbl.pack(fill=tk.BOTH, expand=True)
+                        else:
+                            top_lbl.pack(fill=tk.X)
                     if not single_line and bot_key is not None:
                         bot_lbl = tk.Label(pf, text="", font=("SF Mono", 10),
                                            bg=row_bg, fg="#555",
@@ -2158,6 +2466,7 @@ end tell
                     else:
                         bot_lbl = None
                     pair = {"frame": pf, "top": top_lbl, "bot": bot_lbl,
+                            "top_wrap": top_wrap,
                             "top_key": top_key, "bot_key": bot_key,
                             "top_mode": "full", "bot_mode": "full"}
                     cells_dict[top_key] = pair
@@ -2226,6 +2535,7 @@ end tell
         self._refresh_investor_cache_if_needed()
         self._refresh_consensus_cache_if_needed()
         self._refresh_sector_cache_if_needed()
+        self._refresh_warning_cache_if_needed()
         self._refresh_nxt_cache_if_needed()
 
         # 미국 증시 실시간 갱신 (2분마다, 표시 중일 때만)
@@ -2464,6 +2774,17 @@ end tell
                 status = "-"
                 status_fg = "#555"
 
+            # 투자경고/주의/위험: 행 배경을 경고색으로 오버라이드 (손절/익절보다 우선)
+            _warn_text = self.warning_cache.get(ticker, "") or ""
+            if _warn_text:
+                _row_warn_bg = {
+                    "위험": "#ffd9d9", "관리": "#ffd9d9",   # 진한 빨강 계열
+                    "경고": "#ffe4cc", "과열": "#ffe4cc",   # 주황 계열
+                    "주의": "#fff3cc",                       # 노랑
+                    "정지": "#e8e8e8",                       # 회색
+                }
+                row_bg = _row_warn_bg.get(_warn_text, row_bg)
+
             # 짝수줄(1-based) 은 연한 회색 배경으로 라인 구분 (상태 뱃지 색상은 건드리지 않음)
             if row_bg == "white" and row_idx % 2 == 1:
                 row_bg = "#f5f5f5"
@@ -2563,7 +2884,7 @@ end tell
                 cur_fg = "#1f4e8f"
             else:
                 new_dir = prev_dir  # 불변 → 이전 방향 유지
-                arrow, cur_fg = "", sign_color(pnl_pct)
+                arrow, cur_fg = "", "#999"  # 변동 없으면 회색 (관심주식과 동일)
             self._last_tick_prices[ticker] = current_price
             self._last_tick_dirs[ticker] = new_dir
             cur_cell = (f"{arrow}{current_price:,}", cur_fg)
@@ -2655,7 +2976,7 @@ end tell
                 "day_chg_amt": day_chg_amt_cell,
                 "day_chg_pct": day_chg_pct_cell,
                 "shares": (str(shares), "#222"),
-                "buy": (f"{buy_price:,}", "#222"),
+                "buy": (f"{buy_price:,}", "#999"),
                 "cur": cur_cell,
                 "target_money": target_money_cell,
                 "target_pct": target_pct_cell,
@@ -2714,8 +3035,11 @@ end tell
             cell_by_key["foreign_combined"] = _combine(
                 cell_by_key.get("foreign_amt"), cell_by_key.get("foreign_pct"))
 
+            # 장마감 체크박스 꺼져 있으면 fade 적용 안 함
+            _apply_fade = is_sleeping and getattr(
+                self, "fade_sleeping_var", None) and self.fade_sleeping_var.get()
             self._make_row(row_idx, ticker, cell_by_key, row_bg=row_bg,
-                           parent=parent, parent_r=parent_r, faded=is_sleeping)
+                           parent=parent, parent_r=parent_r, faded=_apply_fade)
 
         save_json(PEAKS_PATH, self.peaks)
 
