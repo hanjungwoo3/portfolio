@@ -19,7 +19,8 @@ from data_service import (fetch_toss_prices_batch, sign_color, format_signed,
                            refresh_warning_sector_cache, refresh_nxt_cache,
                            refresh_consensus_cache, refresh_investor_cache,
                            load_peaks)
-from ui.tab_holdings import format_volume, make_amt_pct_cell
+from ui.tab_holdings import (format_volume, make_amt_pct_cell,
+                                TappableBox, open_toss_stock)
 
 FONT_XS = sp(11)
 FONT_SMALL = sp(12)
@@ -307,8 +308,10 @@ class TabWatch(BoxLayout):
         box.bind(pos=_on_box_resize, size=_on_box_resize)
 
         # ─── 행 1: 2줄 카드 — (이름 + 거래량 + 뱃지) + (섹터 + 외국인 보유%)
-        l1_wrap = BoxLayout(orientation="vertical", size_hint_y=None,
-                              height=sp(52), padding=(sp(4), sp(2)))
+        # 탭 시 Toss 로 이동
+        l1_wrap = TappableBox(orientation="vertical", size_hint_y=None,
+                                height=sp(52), padding=(sp(4), sp(2)))
+        l1_wrap.bind(on_release=lambda *_: open_toss_stock(t))
         l1 = BoxLayout(orientation="vertical", size_hint_y=None,
                         height=sp(48), padding=(sp(10), sp(4)), spacing=sp(1))
         l1_wrap.add_widget(l1)

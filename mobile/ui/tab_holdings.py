@@ -9,9 +9,32 @@ from datetime import datetime
 
 from kivy.clock import mainthread
 from kivy.metrics import sp
+from kivy.uix.behaviors import ButtonBehavior
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.label import Label
 from kivy.uix.scrollview import ScrollView
+
+
+class TappableBox(ButtonBehavior, BoxLayout):
+    """BoxLayout 에 탭 이벤트 지원을 더한 공용 위젯 (종목명 → Toss 이동)."""
+    pass
+
+
+def open_toss_stock(ticker: str, is_us: bool = False):
+    """Toss Invest 종목 상세 페이지 열기.
+    KR: https://tossinvest.com/stocks/A{6자리코드}
+    US: https://tossinvest.com/stocks/{심볼}
+    Android 에서는 OS 핸들러가 Toss 앱이 있으면 앱으로, 없으면 브라우저로 라우팅.
+    """
+    import webbrowser
+    if is_us:
+        url = f"https://tossinvest.com/stocks/{ticker}"
+    else:
+        url = f"https://tossinvest.com/stocks/A{ticker}"
+    try:
+        webbrowser.open(url)
+    except Exception as e:
+        print(f"[toss-link] {e}")
 
 from data_service import (fetch_toss_prices_batch, sign_color, format_signed,
                            refresh_warning_sector_cache,
@@ -508,9 +531,10 @@ class TabHoldings(BoxLayout):
         pension = flow.get("연기금", 0) if flow else None
 
         # ─── 행 1: 2줄 — (이름 + 거래량 + 뱃지) + (섹터 + 외국인 보유%)
-        # 카드 느낌: 둥근 모서리 + 블루그레이 배경
-        l1_wrap = BoxLayout(orientation="vertical", size_hint_y=None,
-                              height=sp(52), padding=(sp(4), sp(2)))
+        # 카드 느낌: 둥근 모서리 + 블루그레이 배경 / 탭 시 Toss 로 이동
+        l1_wrap = TappableBox(orientation="vertical", size_hint_y=None,
+                                height=sp(52), padding=(sp(4), sp(2)))
+        l1_wrap.bind(on_release=lambda *_: open_toss_stock(ticker))
         l1 = BoxLayout(orientation="vertical", size_hint_y=None,
                         height=sp(48), padding=(sp(10), sp(4)), spacing=sp(1))
         l1_wrap.add_widget(l1)
