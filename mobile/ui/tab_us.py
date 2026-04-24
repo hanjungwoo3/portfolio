@@ -186,8 +186,7 @@ class TabUS(BoxLayout):
 
     @staticmethod
     def _us_market_closed() -> bool:
-        """미국 정규장(NYSE) 한국시간 기준 대략 22:30 ~ 05:00 외에는 휴장.
-        간단 판단 (DST 무시): Seoul 23:30–06:00 만 장중으로 간주."""
+        """미국 정규장(NYSE) 한국시간 기준 대략 23:30 ~ 06:00 외에는 휴장."""
         try:
             from datetime import datetime
             from zoneinfo import ZoneInfo
@@ -195,10 +194,32 @@ class TabUS(BoxLayout):
             if now.weekday() >= 5:
                 return True
             hhmm = now.hour * 60 + now.minute
-            # 23:30 ~ 06:00 사이만 열려있다고 봄
             return not (hhmm >= (23 * 60 + 30) or hhmm < 6 * 60)
         except Exception:
             return False
+
+    @staticmethod
+    def _kr_market_closed() -> bool:
+        """KOSPI/KOSDAQ 정규장: 한국시간 09:00 ~ 15:20 이외 휴장."""
+        try:
+            from datetime import datetime
+            from zoneinfo import ZoneInfo
+            now = datetime.now(ZoneInfo("Asia/Seoul"))
+            if now.weekday() >= 5:
+                return True
+            hhmm = now.hour * 60 + now.minute
+            return not (9 * 60 <= hhmm < 15 * 60 + 20)
+        except Exception:
+            return False
+
+    # 한국 심볼 (zZ는 한국장 휴장시)
+    _KR_SYMBOLS = {"^KS200", "^KQ11"}
+
+    def _is_symbol_sleeping(self, symbol: str) -> bool:
+        """심볼별 휴장 판정 — 한국 지수는 KR 장, 나머지는 US 장 기준."""
+        if symbol in self._KR_SYMBOLS:
+            return self._kr_market_closed()
+        return self._us_market_closed()
 
     def _tier0_card(self, idx):
         """2줄 카드: Line 1 [zZ 이름 가격 등락%] + Line 2 [설명] — 둥근 배경."""
@@ -206,10 +227,10 @@ class TabUS(BoxLayout):
         pct_color = "#ff6b6b" if pct > 0 else "#5dade2" if pct < 0 else "#bbb"
         note = idx.get("note", "")
 
-        # zZ 마커 — 심볼별 시장 상태 기반 (^VIX/^GSPC는 US 시간, EWY·USD/KRW는 예외 처리)
+        # zZ 마커 — 심볼별 시장 상태 (USD/KRW 는 24h FX 라 제외)
         symbol = idx.get("symbol", "")
-        us_only_symbols = {"^VIX", "^GSPC", "EWY"}  # 미국 시장 종속
-        show_zzz = symbol in us_only_symbols and self._us_market_closed()
+        show_zzz = (symbol != "KRW=X"
+                     and self._is_symbol_sleeping(symbol))
 
         card = BoxLayout(orientation="vertical", size_hint_y=None,
                           height=sp(56), padding=(sp(10), sp(6)),
@@ -267,33 +288,20 @@ class TabUS(BoxLayout):
 
     # ─── 섹터 행 (좌측 섹터 라벨 + 우측 지표/ETF 스택) ────────
     def _build_sector_row(self, sec_label, indicators, etf_tickers):
-        # 우측 데이터 행들 미리 계산해서 높이 결정
-        row_h = sp(30)
-        n_rows = len(indicators) + sum(
-            1 for t in etf_tickers if t in self.etf_data)
-        n_rows = max(n_rows, 1)
-        total_h = row_h * n_rows + sp(2)
+        """각 지표가 동적 높이(설명 유무에 따라 다름)라 컨테이너도 동적."""
+        row_h = sp(30)  # ETF 고정 높이
 
         outer = BoxLayout(orientation="horizontal", size_hint_y=None,
-                           height=total_h, spacing=0, padding=0)
+                           spacing=0, padding=0)
+        outer.bind(minimum_height=outer.setter("height"))
         _bg(outer, "#ffffff")
         _bottom_line(outer, color="#dddddd")
 
-        # 좌측 섹터 라벨 (수직 중앙)
-        sec_cell = BoxLayout(size_hint_x=self.SEC_W,
-                              padding=(sp(6), sp(2)))
-        _bg(sec_cell, "#d5dbe0")
-        sec_cell.add_widget(Label(
-            text=sec_label, bold=True, color=rgba("#2c3e50"),
-            font_size=FONT_SMALL, halign="left", valign="middle",
-            text_size=(None, total_h),
-            shorten=True, shorten_from="right"))
-        outer.add_widget(sec_cell)
-
-        # 우측 데이터 스택 (지표 → ETF)
+        # 우측 데이터 스택 (먼저 구성하여 높이 결정)
         right = BoxLayout(orientation="vertical",
-                           size_hint_x=(self.NAME_W + self.PRICE_W + self.PCT_W),
+                           size_hint=(self.NAME_W + self.PRICE_W + self.PCT_W, None),
                            spacing=0, padding=(0, 0))
+        right.bind(minimum_height=right.setter("height"))
         for idx in indicators:
             right.add_widget(self._indicator_row(idx, row_h))
         for t in etf_tickers:
@@ -301,32 +309,83 @@ class TabUS(BoxLayout):
             if not info:
                 continue
             right.add_widget(self._etf_row(t, info, row_h))
+
+        # 좌측 섹터 라벨 — 우측 높이를 따라가도록 size_hint_y=1 로 stretch
+        sec_cell = BoxLayout(size_hint_x=self.SEC_W,
+                              padding=(sp(6), sp(2)))
+        _bg(sec_cell, "#d5dbe0")
+        sec_lbl = Label(
+            text=sec_label, bold=True, color=rgba("#2c3e50"),
+            font_size=FONT_SMALL, halign="left", valign="middle",
+            max_lines=1, shorten=True, shorten_from="right")
+        sec_lbl.bind(size=lambda w, v: setattr(w, "text_size", v))
+        sec_cell.add_widget(sec_lbl)
+
+        outer.add_widget(sec_cell)
         outer.add_widget(right)
         return outer
 
     def _indicator_row(self, idx, row_h):
+        """지표 한 줄 — 이름+zZ(좌) 가격/%(우), 아래에 설명(note) 작게."""
         pct = idx.get("pct", 0)
-        # 비율 재정규화 (우측 스택 = NAME+PRICE+PCT)
+        note = idx.get("note", "")
+        symbol = idx.get("symbol", "")
+        sleeping = self._is_symbol_sleeping(symbol)
+        is_futures = symbol.endswith("=F")
+
+        # 비율 재정규화
         total = self.NAME_W + self.PRICE_W + self.PCT_W
         nw, pw, ww = (self.NAME_W / total, self.PRICE_W / total,
                        self.PCT_W / total)
-        row = BoxLayout(orientation="horizontal", size_hint_y=None,
-                         height=row_h, padding=(sp(8), sp(2)),
-                         spacing=sp(2))
-        row.add_widget(Label(
+
+        # note 있으면 2줄 구성
+        card = BoxLayout(orientation="vertical", size_hint_y=None,
+                          padding=(sp(8), sp(3)), spacing=0)
+        card.bind(minimum_height=card.setter("height"))
+        # 선물은 옅은 노란 배경으로 구분 (ETF 와 비슷한 강조)
+        if is_futures:
+            _bg(card, "#fff4d6")
+
+        # Line 1: [zZ] name  |  price  |  pct
+        line1 = BoxLayout(orientation="horizontal", size_hint_y=None,
+                           height=sp(22), spacing=sp(4))
+        name_box = BoxLayout(orientation="horizontal", size_hint_x=nw,
+                              spacing=sp(3))
+        if sleeping:
+            zzz = Label(text="zZ", bold=True, color=rgba("#7aa3d4"),
+                         font_size=FONT_XS,
+                         size_hint_x=None, halign="left", valign="middle")
+            zzz.bind(texture_size=lambda w, v: setattr(w, "width", v[0]))
+            name_box.add_widget(zzz)
+        name_lbl = Label(
             text=idx["name"], bold=True, color=rgba("#222"),
             font_size=FONT_SMALL, halign="left", valign="middle",
-            size_hint_x=nw, text_size=(None, row_h),
-            shorten=True, shorten_from="right"))
-        row.add_widget(Label(
+            size_hint_x=None,
+            max_lines=1, shorten=True, shorten_from="right")
+        name_lbl.bind(texture_size=lambda w, v: setattr(w, "width", v[0]))
+        name_box.add_widget(name_lbl)
+        name_box.add_widget(BoxLayout())  # 좌측 정렬용 우측 스페이서
+        line1.add_widget(name_box)
+        line1.add_widget(Label(
             text=f"{idx['price']:,.2f}", color=rgba("#444"),
             font_size=FONT_SMALL, halign="right", valign="middle",
-            size_hint_x=pw, text_size=(None, row_h)))
-        row.add_widget(Label(
+            size_hint_x=pw, text_size=(None, sp(22))))
+        line1.add_widget(Label(
             text=f"{pct:+.2f}%", bold=True, color=rgba(sign_color(pct)),
             font_size=FONT_SMALL, halign="right", valign="middle",
-            size_hint_x=ww, text_size=(None, row_h)))
-        return row
+            size_hint_x=ww, text_size=(None, sp(22))))
+        card.add_widget(line1)
+
+        # Line 2: note 작게 회색
+        if note:
+            note_lbl = Label(
+                text=note, color=rgba("#999"),
+                font_size=sp(10), halign="left", valign="middle",
+                size_hint_y=None, height=sp(14),
+                max_lines=1, shorten=True, shorten_from="right")
+            note_lbl.bind(size=lambda w, v: setattr(w, "text_size", v))
+            card.add_widget(note_lbl)
+        return card
 
     def _etf_row(self, ticker, info, row_h):
         price = info.get("price", 0)

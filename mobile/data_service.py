@@ -60,28 +60,45 @@ TIER0 = [
 
 SECTOR_INDICATORS = [
     ("반도체", "반도체", [
-        ("^SOX", "필라델피아반도체"),
-        ("NVDA", "NVIDIA"),
-        ("TSM", "TSMC"),
+        ("^SOX", "필라델피아반도체", "미국 반도체 30개사 지수"),
+        ("NVDA", "NVIDIA", "AI 칩 대장 — HBM 수요"),
+        ("TSM", "TSMC", "파운드리 1위 — 업황 대표"),
+        ("SOX=F", "SOX 선물", "반도체 선물 — 정규장 외 흐름 체크"),
     ]),
-    ("방산", "방산", [("LMT", "Lockheed Martin")]),
-    ("중공업", "중공업/조선", [("CAT", "Caterpillar")]),
+    ("방산", "방산", [
+        ("LMT", "Lockheed Martin", "방산 대장 — 글로벌 방산 경기"),
+    ]),
+    ("중공업", "중공업/조선", [
+        ("CAT", "Caterpillar", "중장비 — 경기 사이클 선행"),
+    ]),
     ("리츠", "리츠", [
-        ("^TNX", "미국 10Y"),
-        ("VNQ", "Vanguard REIT"),
+        ("^TNX", "미국 10Y", "10년물 국채금리 — 리츠·성장주 할인율"),
+        ("ZN=F", "미국 10Y 선물", "10Y 선물 — 금리 선행 지표"),
+        ("VNQ", "Vanguard REIT", "미국 리츠 ETF — 부동산 투심"),
     ]),
-    ("에너지", "에너지", [("CL=F", "WTI 원유")]),
-    ("자동차", "자동차", [("TSLA", "Tesla")]),
-    ("건설", "건설", [("DHI", "D.R. Horton")]),
-    ("금융", "금융", [("JPM", "JPMorgan")]),
+    ("에너지", "에너지", [
+        ("CL=F", "WTI 원유", "국제 유가 — 정유·에너지 직결"),
+    ]),
+    ("자동차", "자동차", [
+        ("TSLA", "Tesla", "EV 대장 — 자동차·2차전지 선행"),
+    ]),
+    ("건설", "건설", [
+        ("DHI", "D.R. Horton", "미국 최대 주택건설사"),
+    ]),
+    ("금융", "금융", [
+        ("JPM", "JPMorgan", "미국 금융 대장 — 은행주 투심"),
+    ]),
     ("플랫폼", "플랫폼/AI", [
-        ("^IXIC", "나스닥"),
-        ("META", "Meta"),
+        ("^IXIC", "나스닥", "미국 기술주 전체"),
+        ("NQ=F", "나스닥 선물", "나스닥 선물 — 정규장 외 흐름"),
+        ("META", "Meta", "플랫폼 대장 — 광고·AI"),
     ]),
-    ("바이오", "바이오", [("XBI", "SPDR Biotech")]),
+    ("바이오", "바이오", [
+        ("XBI", "SPDR Biotech", "미국 바이오 ETF"),
+    ]),
     ("한국지수", "한국지수", [
-        ("^KS200", "KOSPI 200"),
-        ("^KQ11", "KOSDAQ"),
+        ("^KS200", "KOSPI 200", "코스피 200 지수"),
+        ("^KQ11", "KOSDAQ", "코스닥 지수"),
     ]),
 ]
 
@@ -155,8 +172,8 @@ def fetch_us_indices() -> list:
     for sym, _, _, _ in TIER0:
         all_symbols.add(sym)
     for sec_key, _, indicators in SECTOR_INDICATORS:
-        for sym, _ in indicators:
-            all_symbols.add(sym)
+        for item in indicators:
+            all_symbols.add(item[0])
 
     quotes = fetch_yahoo_batch(sorted(all_symbols))
 
@@ -173,13 +190,17 @@ def fetch_us_indices() -> list:
         })
 
     for sec_key, sec_label, indicators in SECTOR_INDICATORS:
-        for sym, name in indicators:
+        for item in indicators:
+            # (sym, name) 구식 2-tuple 과 (sym, name, note) 신식 3-tuple 모두 허용
+            sym = item[0]
+            name = item[1]
+            note = item[2] if len(item) > 2 else ""
             q = quotes.get(sym)
             if not q:
                 continue
             pct = (q["price"] - q["prev"]) / q["prev"] * 100 if q["prev"] else 0
             result.append({
-                "symbol": sym, "name": name, "note": "",
+                "symbol": sym, "name": name, "note": note,
                 "tier": "T1", "sector": sec_key,
                 "price": q["price"], "pct": pct,
             })

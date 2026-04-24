@@ -510,13 +510,17 @@ class TabHoldings(BoxLayout):
         pension = flow.get("연기금", 0) if flow else None
 
         # ─── 행 1: 2줄 — (이름 + 거래량 + 뱃지) + (섹터 + 외국인 보유%)
+        # 카드 느낌: 둥근 모서리 + 블루그레이 배경
+        l1_wrap = BoxLayout(orientation="vertical", size_hint_y=None,
+                              height=sp(52), padding=(sp(4), sp(2)))
         l1 = BoxLayout(orientation="vertical", size_hint_y=None,
-                        height=sp(48), padding=(sp(8), sp(3)), spacing=sp(1))
+                        height=sp(48), padding=(sp(10), sp(4)), spacing=sp(1))
+        l1_wrap.add_widget(l1)
         name_bg = _c("#dce6f2") if not is_sleeping else _c("#ececec")
-        from kivy.graphics import Color as _Col, Rectangle as _Rect
+        from kivy.graphics import Color as _Col, RoundedRectangle as _RR
         with l1.canvas.before:
             _Col(*rgba(name_bg))
-            l1._bg = _Rect(pos=l1.pos, size=l1.size)
+            l1._bg = _RR(pos=l1.pos, size=l1.size, radius=[sp(8)])
         l1.bind(pos=lambda w, v: setattr(w._bg, "pos", v),
                  size=lambda w, v: setattr(w._bg, "size", v))
 
@@ -571,7 +575,7 @@ class TabHoldings(BoxLayout):
         line_bot.bind(size=lambda w, v: setattr(w, "text_size", v))
         l1.add_widget(line_bot)
 
-        box.add_widget(l1)
+        box.add_widget(l1_wrap)
 
         # 모든 데이터 셀은 make_amt_pct_cell 로 동일 구조 (금액 58% + % 42%) — 세로 정렬
         def _cell(amt, pct, amt_color, pct_color=None, col=COL_A, bold=False):
