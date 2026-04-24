@@ -231,12 +231,12 @@ class TabWatch(BoxLayout):
                 color=rgba("#666"), halign=halign, valign="middle",
                 size_hint_x=sx))
 
-        # Row A: 외국인 | 연기금 | 기관 (맨 위로)
+        # Row A: 외국인 | 기관 | 연기금 (맨 위로)
         r1 = BoxLayout(orientation="horizontal", size_hint_y=None,
                         height=sp(18), spacing=sp(4))
         r1.add_widget(_hdr("외국인", COL_A, "right"))
-        r1.add_widget(_hdr("연기금", COL_B, "right"))
-        r1.add_widget(_hdr("기관", COL_C, "right"))
+        r1.add_widget(_hdr("기관", COL_B, "right"))
+        r1.add_widget(_hdr("연기금", COL_C, "right"))
         box.add_widget(r1)
 
         # Row B: (공백) | 피크가(%) | 거래량
@@ -416,17 +416,17 @@ class TabWatch(BoxLayout):
                 size_hint_x=col, bold=bold,
                 font_size=FONT_MD, height=sp(40))
 
-        # ─── 행 A: 외국인 | 연기금 | 기관 (맨 위)
+        # ─── 행 A: 외국인 | 기관 | 연기금 (맨 위)
         l2 = BoxLayout(orientation="horizontal", size_hint_y=None,
                         height=sp(40), spacing=sp(4))
         l2.add_widget(_cell(format_signed(foreign) if foreign else "", "",
                                _c(sign_color(foreign)) if foreign else _c("#aaa"),
                                col=COL_A))
-        l2.add_widget(_cell(format_signed(pension) if pension else "", "",
-                               _c(sign_color(pension)) if pension else _c("#aaa"),
-                               col=COL_B))
         l2.add_widget(_cell(format_signed(inst) if inst else "", "",
                                _c(sign_color(inst)) if inst else _c("#aaa"),
+                               col=COL_B))
+        l2.add_widget(_cell(format_signed(pension) if pension else "", "",
+                               _c(sign_color(pension)) if pension else _c("#aaa"),
                                col=COL_C))
         box.add_widget(l2)
 
