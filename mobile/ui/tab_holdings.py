@@ -602,26 +602,29 @@ class TabHoldings(BoxLayout):
         left_col.add_widget(sector_lbl)
         l1.add_widget(left_col)
 
-        # 우측 블록 — 소득 +금액 (%) / 오늘 +금액 (%)
-        # 라벨(소득/오늘)은 검정 non-bold, 숫자만 sign_color, 둘 다 FONT_SMALL
+        # 우측 블록 — 전체 +금액 (%) / 오늘 +금액 (%)
+        # 라벨은 검정 작은 non-bold, 금액은 sign_color + bold + 큰 폰트, (%) 는 작은 non-bold
         right_col = BoxLayout(orientation="vertical", size_hint_x=0.5,
                                spacing=sp(1))
 
         def _sub_line(label_text, signed_amt, pct_value, color):
             color_hex = _c(color).lstrip("#")
+            big_px = int(sp(15))  # 금액 강조용
             text = (f"[color=222222]{label_text}[/color] "
-                    f"[color={color_hex}]{signed_amt} ({pct_value:+.2f}%)[/color]")
+                    f"[color={color_hex}]"
+                    f"[size={big_px}][b]{signed_amt}[/b][/size] "
+                    f"({pct_value:+.2f}%)[/color]")
             lbl = Label(
                 text=text, markup=True, font_size=FONT_SMALL,
                 color=rgba(_c("#222")),
-                size_hint_y=None, height=sp(22),
+                size_hint_y=None, height=sp(24),
                 halign="left", valign="middle",
                 max_lines=1, shorten=True, shorten_from="right")
             lbl.bind(size=lambda w, v: setattr(w, "text_size", v))
             return lbl
 
         right_col.add_widget(_sub_line(
-            "소득", format_signed(pnl), pnl_pct, sign_color(pnl)))
+            "전체", format_signed(pnl), pnl_pct, sign_color(pnl)))
         right_col.add_widget(_sub_line(
             "오늘", format_signed(day_diff), day_pct, sign_color(day_diff)))
         l1.add_widget(right_col)
@@ -701,12 +704,12 @@ class TabHoldings(BoxLayout):
 
         box.add_widget(_single(
             "매수가", int(invested),
-            "전체손익",
+            "전체",
             f"{format_signed(pnl)} ({pnl_pct:+.2f}%)",
             sign_color(pnl)))
         box.add_widget(_single(
             "현재가", int(current),
-            "전일대비",
+            "오늘",
             f"{format_signed(day_diff)} ({day_pct:+.2f}%)",
             sign_color(day_diff)))
         return box
