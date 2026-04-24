@@ -7,3 +7,10 @@ __pycache__/
 data/holdings.json
 data/peaks.json
 data/alerts/*.json
+
+# Mobile 앱 — 민감/캐시/빌드 산출물
+mobile/holdings.json
+mobile/.app_state.json
+mobile/.buildozer/
+mobile/bin/
+mobile/buildozer.log

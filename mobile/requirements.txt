@@ -1,0 +1,5 @@
+kivy==2.3.0
+requests
+yfinance
+beautifulsoup4
+lxml
