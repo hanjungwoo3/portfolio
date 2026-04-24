@@ -26,9 +26,9 @@ jobs:
           path: |
             ~/.buildozer
             mobile/.buildozer
-          # v2 로 키 올려 이전 실패 빌드의 손상된 SDK 캐시 무효화
-          key: buildozer-v2-${{ hashFiles('mobile/buildozer.spec') }}
-          restore-keys: buildozer-v2-
+          # v3 — 수동 cmdline-tools 설치로 경로 구조 변경
+          key: buildozer-v3-${{ hashFiles('mobile/buildozer.spec') }}
+          restore-keys: buildozer-v3-
 
       - name: Install system dependencies
         run: |
@@ -39,18 +39,30 @@ jobs:
             libncurses5-dev libncursesw5-dev libtinfo5 cmake \
             libffi-dev libssl-dev
 
-      - name: Install buildozer (master) + cython
+      - name: Install buildozer + cython
         run: |
           pip install --upgrade pip
-          pip install cython==0.29.33
-          # buildozer stable(1.5) 은 최신 Android cmdline-tools 구조 미지원 → master 사용
-          pip install git+https://github.com/kivy/buildozer.git@master
+          pip install cython==0.29.33 buildozer
+
+      - name: Pre-install Android cmdline-tools (buildozer 가 기대하는 tools/ 경로)
+        run: |
+          SDK=$HOME/.buildozer/android/platform/android-sdk
+          mkdir -p "$SDK"
+          cd /tmp
+          curl -sL https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -o cmdtools.zip
+          unzip -q cmdtools.zip
+          # buildozer stable은 tools/bin/sdkmanager 를 찾음 — 옛 경로 구조로 배치
+          rm -rf "$SDK/tools"
+          mv cmdline-tools "$SDK/tools"
+          # 신형 cmdline-tools/latest 경로도 준비 (새 buildozer 대비)
+          mkdir -p "$SDK/cmdline-tools"
+          cp -r "$SDK/tools" "$SDK/cmdline-tools/latest"
+          ls "$SDK/tools/bin/sdkmanager"
 
       - name: Pre-accept Android SDK licenses
         run: |
-          LICENSE_DIR=~/.buildozer/android/platform/android-sdk/licenses
+          LICENSE_DIR=$HOME/.buildozer/android/platform/android-sdk/licenses
           mkdir -p "$LICENSE_DIR"
-          # 공식 Android SDK 라이선스 해시 (2024 기준)
           printf "\n8933bad161af4178b1185d1a37fbf41ea5269c55\nd56f5187479451eabf01fb78af6dfcb131a6481e\n24333f8a63b6825ea9c5514f83c2829b004d1fee" \
             > "$LICENSE_DIR/android-sdk-license"
           printf "\n84831b9409646a918e30573bab4c9c91346d8abd" \
