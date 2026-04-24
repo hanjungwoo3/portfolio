@@ -387,12 +387,16 @@ class TabWatch(BoxLayout):
             max_lines=1, shorten=True, shorten_from="right")
         today_lbl.bind(size=lambda w, v: setattr(w, "text_size", v))
         right_col.add_widget(today_lbl)
-        # 두번째 줄은 현재가 표시 (비어있으면 어색하니)
-        price_text = f"[color=444444]{price:,}[/color]" if price else ""
+        # 두번째 줄: 현재 56,100 — 라벨 검정 작음, 금액 bold 큰 폰트
+        if price:
+            price_text = (f"[color=222222]현재[/color] "
+                          f"[color=333333][size={big_px}][b]{price:,}[/b][/size][/color]")
+        else:
+            price_text = ""
         price_lbl = Label(
             text=price_text, markup=True, font_size=FONT_SMALL,
-            color=rgba(_c("#444")),
-            size_hint_y=None, height=sp(18),
+            color=rgba(_c("#222")),
+            size_hint_y=None, height=sp(24),
             halign="left", valign="middle",
             max_lines=1, shorten=True, shorten_from="right")
         price_lbl.bind(size=lambda w, v: setattr(w, "text_size", v))
