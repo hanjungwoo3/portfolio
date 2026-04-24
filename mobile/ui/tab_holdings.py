@@ -440,7 +440,7 @@ class TabHoldings(BoxLayout):
                 color=rgba("#666"), halign=halign, valign="middle",
                 size_hint_x=sx, text_size=(None, sp(18)))
 
-        # Row A: 외국인 | 기관 | 연기금 (맨 위로)
+        # Row A: 외국인 | 기관 | 연기금
         l2 = BoxLayout(orientation="horizontal", size_hint_y=None,
                         height=sp(18), spacing=sp(4))
         l2.add_widget(_hdr_cell("외국인", COL_A, "right"))
@@ -448,19 +448,19 @@ class TabHoldings(BoxLayout):
         l2.add_widget(_hdr_cell("연기금", COL_C, "right"))
         box.add_widget(l2)
 
-        # Row B: 매수가 | 피크가(%) | 거래량
+        # Row B: 거래량 | 피크가(%) | 목표가(%)
         l3 = BoxLayout(orientation="horizontal", size_hint_y=None,
                         height=sp(18), spacing=sp(4))
-        l3.add_widget(_hdr_cell("매수가", COL_A, "right"))
+        l3.add_widget(_hdr_cell("거래량", COL_A, "right"))
         l3.add_widget(_hdr_cell("피크가 (%)", COL_B, "right"))
-        l3.add_widget(_hdr_cell("거래량", COL_C, "right"))
+        l3.add_widget(_hdr_cell("목표가 (%)", COL_C, "right"))
         box.add_widget(l3)
 
-        # Row C: 현재가 | 목표가(%) | 외국인보유%
+        # Row C: 매수가 | 현재가 | 외국인보유%
         l4 = BoxLayout(orientation="horizontal", size_hint_y=None,
                         height=sp(18), spacing=sp(4))
-        l4.add_widget(_hdr_cell("현재가", COL_A, "right"))
-        l4.add_widget(_hdr_cell("목표가 (%)", COL_B, "right"))
+        l4.add_widget(_hdr_cell("매수가", COL_A, "right"))
+        l4.add_widget(_hdr_cell("현재가", COL_B, "right"))
         l4.add_widget(_hdr_cell("외국인보유%", COL_C, "right"))
         box.add_widget(l4)
         return box
@@ -646,7 +646,7 @@ class TabHoldings(BoxLayout):
                 size_hint_x=col, bold=bold,
                 font_size=FONT_MD, height=sp(40))
 
-        # ─── 행 A: 외국인 | 기관 | 연기금 (맨 위)
+        # ─── 행 A: 외국인 | 기관 | 연기금
         l2 = BoxLayout(orientation="horizontal", size_hint_y=None,
                         height=sp(40), spacing=sp(4))
         l2.add_widget(_cell(format_signed(foreign) if foreign else "", "",
@@ -660,30 +660,30 @@ class TabHoldings(BoxLayout):
                                col=COL_C))
         box.add_widget(l2)
 
-        # ─── 행 B: 매수가 | 피크가(%) | 거래량
+        # ─── 행 B: 거래량 | 피크가(%) | 목표가(%)
         l3 = BoxLayout(orientation="horizontal", size_hint_y=None,
                         height=sp(40), spacing=sp(4))
-        l3.add_widget(_cell(f"{avg:,}", "", _c("#666"), col=COL_A))
+        l3.add_widget(_cell(format_volume(volume) if volume else "",
+                               "", _c("#666") if volume else _c("#aaa"),
+                               col=COL_A))
         if peak:
             peak_c = _c(sign_color(peak_gap_pct) if peak_gap_pct < 0 else "#888")
             l3.add_widget(_cell(f"{int(peak):,}", f"({peak_gap_pct:+.2f}%)",
                                   peak_c, col=COL_B))
         else:
             l3.add_widget(_cell("", "", _c("#aaa"), col=COL_B))
-        l3.add_widget(_cell(format_volume(volume) if volume else "",
-                               "", _c("#666") if volume else _c("#aaa"),
-                               col=COL_C))
+        if target:
+            l3.add_widget(_cell(f"{target:,}", f"({target_gap_pct:+.2f}%)",
+                                  _c(sign_color(target_gap_pct)), col=COL_C))
+        else:
+            l3.add_widget(_cell("", "", _c("#aaa"), col=COL_C))
         box.add_widget(l3)
 
-        # ─── 행 C: 현재가 | 목표가(%) | 외국인보유%
+        # ─── 행 C: 매수가 | 현재가 | 외국인보유%
         l4 = BoxLayout(orientation="horizontal", size_hint_y=None,
                         height=sp(40), spacing=sp(4))
-        l4.add_widget(_cell(f"{cur_price:,}", "", _c("#333"), col=COL_A))
-        if target:
-            l4.add_widget(_cell(f"{target:,}", f"({target_gap_pct:+.2f}%)",
-                                  _c(sign_color(target_gap_pct)), col=COL_B))
-        else:
-            l4.add_widget(_cell("", "", _c("#aaa"), col=COL_B))
+        l4.add_widget(_cell(f"{avg:,}", "", _c("#666"), col=COL_A))
+        l4.add_widget(_cell(f"{cur_price:,}", "", _c("#333"), col=COL_B))
         l4.add_widget(_cell(
             f"{foreign_ratio:.2f}%" if foreign_ratio and foreign_ratio > 0 else "",
             "", _c("#333") if foreign_ratio and foreign_ratio > 0 else _c("#aaa"),
