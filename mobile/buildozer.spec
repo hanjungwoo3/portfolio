@@ -10,7 +10,7 @@ source.include_patterns = holdings.json,ui/*.py
 version = 1.0
 
 # Python / Kivy
-requirements = python3,kivy==2.3.0,requests,urllib3,charset-normalizer,idna,certifi,beautifulsoup4,soupsieve
+requirements = python3,kivy==2.3.0,requests,urllib3,charset-normalizer,idna,certifi,beautifulsoup4,soupsieve,typing_extensions
 
 # 한글 폰트 (Kivy 기본 폰트가 한글 미지원이라 추가 필요)
 # NotoSansKR 또는 나눔고딕을 넣어주세요. 없으면 빌드 시 제거 가능.
