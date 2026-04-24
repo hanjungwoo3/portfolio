@@ -29,7 +29,8 @@ def open_toss_stock(ticker: str, is_us: bool = False):
     스킴 핸들러가 없거나 PC 실행 시 https 브라우저로 폴백.
     """
     code = ticker if is_us else f"A{ticker}"
-    deep = f"supertoss://stocks/{code}"
+    # supertoss://stocks/… 는 앱은 열리나 홈으로 빠졌음 → singular 로 재시도
+    deep = f"supertoss://stock/{code}"
     https = f"https://tossinvest.com/stocks/{code}"
 
     try:
