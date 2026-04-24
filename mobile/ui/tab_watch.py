@@ -372,16 +372,16 @@ class TabWatch(BoxLayout):
 
         box.add_widget(l1_wrap)
 
-        # 모든 데이터 셀 동일 구조 (금액 58% + % 42%) — 세로 정렬
+        # 모든 데이터 셀 동일 구조 — 금액 위 / (%) 아래 스택
         def _cell(amt, pct, amt_color, pct_color=None, col=COL_A, bold=False):
             return make_amt_pct_cell(
                 amt, pct, amt_color, pct_color or amt_color,
                 size_hint_x=col, bold=bold,
-                font_size=FONT_MD, height=sp(22))
+                font_size=FONT_MD, height=sp(34))
 
         # ─── 행 2: 현재가 | 전일대비(%) | 외국인
         l2 = BoxLayout(orientation="horizontal", size_hint_y=None,
-                        height=sp(22), spacing=sp(4))
+                        height=sp(34), spacing=sp(4))
         l2.add_widget(_cell(f"{price:,}" if price else "", "",
                                _c("#333"), col=COL_A))
         if diff:
@@ -396,7 +396,7 @@ class TabWatch(BoxLayout):
 
         # ─── 행 3: 목표가(%) | 피크가(%) | 기관
         l3 = BoxLayout(orientation="horizontal", size_hint_y=None,
-                        height=sp(22), spacing=sp(4))
+                        height=sp(34), spacing=sp(4))
         if target:
             l3.add_widget(_cell(f"{target:,}", f"({target_gap_pct:+.2f}%)",
                                   _c(sign_color(target_gap_pct)), col=COL_A))

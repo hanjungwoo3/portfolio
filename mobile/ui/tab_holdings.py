@@ -107,27 +107,27 @@ def make_amt_pct_cell(amt_text: str, pct_text: str,
                         amt_color: str, pct_color: str,
                         size_hint_x: float, bold: bool = False,
                         font_size=None, height=None):
-    """금액 + (%) 를 2분할하여 각각 우측정렬하는 셀 — 세로 정렬 맞춤.
-    좁은 화면에서도 1줄 유지 (max_lines=1, shorten)."""
+    """금액 + (%) 를 세로 2단 스택으로 렌더 — 금액 위 / pct 아래 작은 폰트.
+    둘 다 오른쪽 정렬. 가로 공간 전체를 써서 ellipsis 발생 최소화."""
     fs = font_size or sp(14)
-    pct_fs = sp(12)  # pct 는 항상 작은 폰트로 (좁은 공간 대응)
-    h = height or sp(22)
-    wrap = BoxLayout(orientation="horizontal", size_hint_x=size_hint_x,
-                      size_hint_y=None, height=h, spacing=sp(2))
+    pct_fs = sp(10)
+    h = height or sp(34)
+    # pct 가 없으면 amt 만 중앙 정렬된 것처럼 보이게 상/하 공백 균등 분배
+    wrap = BoxLayout(orientation="vertical", size_hint_x=size_hint_x,
+                      size_hint_y=None, height=h, spacing=0)
     amt = Label(text=amt_text, font_size=fs, bold=bold,
                  color=rgba(amt_color),
-                 halign="right", valign="middle",
-                 size_hint_x=0.58,
-                 max_lines=1, shorten=True, shorten_from="left")
+                 halign="right", valign="bottom" if pct_text else "middle",
+                 size_hint_y=0.58 if pct_text else 1.0)
     amt.bind(size=lambda w, v: setattr(w, "text_size", v))
     wrap.add_widget(amt)
-    pct = Label(text=pct_text, font_size=pct_fs,
-                 color=rgba(pct_color),
-                 halign="right", valign="middle",
-                 size_hint_x=0.42,
-                 max_lines=1, shorten=True, shorten_from="left")
-    pct.bind(size=lambda w, v: setattr(w, "text_size", v))
-    wrap.add_widget(pct)
+    if pct_text:
+        pct = Label(text=pct_text, font_size=pct_fs,
+                     color=rgba(pct_color),
+                     halign="right", valign="top",
+                     size_hint_y=0.42)
+        pct.bind(size=lambda w, v: setattr(w, "text_size", v))
+        wrap.add_widget(pct)
     return wrap
 
 
@@ -577,16 +577,16 @@ class TabHoldings(BoxLayout):
 
         box.add_widget(l1_wrap)
 
-        # 모든 데이터 셀은 make_amt_pct_cell 로 동일 구조 (금액 58% + % 42%) — 세로 정렬
+        # 모든 데이터 셀은 make_amt_pct_cell 로 동일 구조 — 금액 위 / (%) 아래 스택
         def _cell(amt, pct, amt_color, pct_color=None, col=COL_A, bold=False):
             return make_amt_pct_cell(
                 amt, pct, amt_color, pct_color or amt_color,
                 size_hint_x=col, bold=bold,
-                font_size=FONT_MD, height=sp(22))
+                font_size=FONT_MD, height=sp(34))
 
         # ─── 행 2: 매수가 | 손익금액(%) | 외국인
         l2 = BoxLayout(orientation="horizontal", size_hint_y=None,
-                        height=sp(22), spacing=sp(4))
+                        height=sp(34), spacing=sp(4))
         l2.add_widget(_cell(f"{avg:,}", "", _c("#666"), col=COL_A))
         l2.add_widget(_cell(format_signed(pnl), f"({pnl_pct:+.2f}%)",
                                _c(sign_color(pnl)), col=COL_B, bold=name_bold))
@@ -597,7 +597,7 @@ class TabHoldings(BoxLayout):
 
         # ─── 행 3: 현재가 | 전일대비(%) | 기관
         l3 = BoxLayout(orientation="horizontal", size_hint_y=None,
-                        height=sp(22), spacing=sp(4))
+                        height=sp(34), spacing=sp(4))
         l3.add_widget(_cell(f"{cur_price:,}", "", _c("#333"), col=COL_A))
         l3.add_widget(_cell(format_signed(day_diff), f"({day_pct:+.2f}%)",
                                _c(sign_color(day_diff)), col=COL_B, bold=name_bold))
@@ -608,7 +608,7 @@ class TabHoldings(BoxLayout):
 
         # ─── 행 4: 목표가(%) | 피크가(%) | 연기금
         l4 = BoxLayout(orientation="horizontal", size_hint_y=None,
-                        height=sp(22), spacing=sp(4))
+                        height=sp(34), spacing=sp(4))
         if target:
             l4.add_widget(_cell(f"{target:,}", f"({target_gap_pct:+.2f}%)",
                                   _c(sign_color(target_gap_pct)), col=COL_A))
@@ -644,37 +644,37 @@ class TabHoldings(BoxLayout):
 
         # 행 1: 매수가 합계 | invested | 누적손익(%)
         l1 = BoxLayout(orientation="horizontal", size_hint_y=None,
-                        height=sp(24), spacing=sp(4))
+                        height=sp(34), spacing=sp(4))
         l1.add_widget(Label(
             text="매수가 합계", bold=True, font_size=FONT_MD,
             color=rgba("#000"), size_hint_x=COL_A, halign="left",
-            valign="middle", text_size=(None, sp(24))))
+            valign="middle", text_size=(None, sp(34))))
         l1.add_widget(Label(
             text=f"{int(invested):,}원", bold=True, font_size=FONT_MD,
             color=rgba("#222"), size_hint_x=COL_B, halign="right",
-            valign="middle", text_size=(None, sp(24))))
-        l1.add_widget(Label(
-            text=f"{format_signed(pnl)} ({pnl_pct:+.2f}%)",
-            bold=True, font_size=FONT_MD,
-            color=rgba(sign_color(pnl)), size_hint_x=COL_C, halign="right",
-            valign="middle", text_size=(None, sp(24))))
+            valign="middle", text_size=(None, sp(34))))
+        l1.add_widget(make_amt_pct_cell(
+            format_signed(pnl), f"({pnl_pct:+.2f}%)",
+            sign_color(pnl), sign_color(pnl),
+            size_hint_x=COL_C, bold=True,
+            font_size=FONT_MD, height=sp(34)))
         box.add_widget(l1)
 
         # 행 2: 현재가 합계 | current | 전일대비(%)
         l2 = BoxLayout(orientation="horizontal", size_hint_y=None,
-                        height=sp(24), spacing=sp(4))
+                        height=sp(34), spacing=sp(4))
         l2.add_widget(Label(
             text="현재가 합계", bold=True, font_size=FONT_MD,
             color=rgba("#000"), size_hint_x=COL_A, halign="left",
-            valign="middle", text_size=(None, sp(24))))
+            valign="middle", text_size=(None, sp(34))))
         l2.add_widget(Label(
             text=f"{int(current):,}원", bold=True, font_size=FONT_MD,
             color=rgba("#222"), size_hint_x=COL_B, halign="right",
-            valign="middle", text_size=(None, sp(24))))
-        l2.add_widget(Label(
-            text=f"{format_signed(day_diff)} ({day_pct:+.2f}%)",
-            bold=True, font_size=FONT_MD,
-            color=rgba(sign_color(day_diff)), size_hint_x=COL_C, halign="right",
-            valign="middle", text_size=(None, sp(24))))
+            valign="middle", text_size=(None, sp(34))))
+        l2.add_widget(make_amt_pct_cell(
+            format_signed(day_diff), f"({day_pct:+.2f}%)",
+            sign_color(day_diff), sign_color(day_diff),
+            size_hint_x=COL_C, bold=True,
+            font_size=FONT_MD, height=sp(34)))
         box.add_widget(l2)
         return box
