@@ -602,28 +602,28 @@ class TabHoldings(BoxLayout):
         left_col.add_widget(sector_lbl)
         l1.add_widget(left_col)
 
-        # 우측 블록 — 전체:손익(%) / 전일:전일대비(%)
+        # 우측 블록 — 소득 +금액 (%) / 오늘 +금액 (%)
+        # 라벨(소득/오늘)은 검정 non-bold, 숫자만 sign_color, 둘 다 FONT_SMALL
         right_col = BoxLayout(orientation="vertical", size_hint_x=0.5,
                                spacing=sp(1))
-        total_text = f"전체:{format_signed(pnl)} ({pnl_pct:+.2f}%)"
-        total_lbl = Label(
-            text=total_text, bold=name_bold, font_size=FONT_MD,
-            color=rgba(_c(sign_color(pnl))),
-            size_hint_y=None, height=sp(24),
-            halign="left", valign="middle",
-            max_lines=1, shorten=True, shorten_from="right")
-        total_lbl.bind(size=lambda w, v: setattr(w, "text_size", v))
-        right_col.add_widget(total_lbl)
 
-        day_text = f"전일:{format_signed(day_diff)} ({day_pct:+.2f}%)"
-        day_lbl = Label(
-            text=day_text, bold=name_bold, font_size=FONT_MD,
-            color=rgba(_c(sign_color(day_diff))),
-            size_hint_y=None, height=sp(18),
-            halign="left", valign="middle",
-            max_lines=1, shorten=True, shorten_from="right")
-        day_lbl.bind(size=lambda w, v: setattr(w, "text_size", v))
-        right_col.add_widget(day_lbl)
+        def _sub_line(label_text, signed_amt, pct_value, color):
+            color_hex = _c(color).lstrip("#")
+            text = (f"[color=222222]{label_text}[/color] "
+                    f"[color={color_hex}]{signed_amt} ({pct_value:+.2f}%)[/color]")
+            lbl = Label(
+                text=text, markup=True, font_size=FONT_SMALL,
+                color=rgba(_c("#222")),
+                size_hint_y=None, height=sp(22),
+                halign="left", valign="middle",
+                max_lines=1, shorten=True, shorten_from="right")
+            lbl.bind(size=lambda w, v: setattr(w, "text_size", v))
+            return lbl
+
+        right_col.add_widget(_sub_line(
+            "소득", format_signed(pnl), pnl_pct, sign_color(pnl)))
+        right_col.add_widget(_sub_line(
+            "오늘", format_signed(day_diff), day_pct, sign_color(day_diff)))
         l1.add_widget(right_col)
 
         box.add_widget(l1_wrap)
