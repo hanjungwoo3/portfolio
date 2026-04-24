@@ -25,12 +25,15 @@ class TappableBox(ButtonBehavior, BoxLayout):
 
 def open_toss_stock(ticker: str, is_us: bool = False):
     """Toss Invest 종목 상세 페이지 열기.
-    Android 에선 supertoss:// 딥링크로 Toss 앱 직접 실행 (설치된 경우),
-    스킴 핸들러가 없거나 PC 실행 시 https 브라우저로 폴백.
+    AppsFlyer 마케팅 링크에서 확인된 실제 포맷:
+      supertoss://securities?url=https://service.tossinvest.com?nextLandingUrl=/stocks/A005930
+    Android 에선 이 딥링크로 Toss 앱 내 Securities 핸들러 경유 → 종목 화면 진입.
+    PC 실행 시엔 https 브라우저로 폴백.
     """
+    from urllib.parse import quote
     code = ticker if is_us else f"A{ticker}"
-    # 이전 시도: stocks/ 와 stock/ 모두 앱은 열리되 홈. stockpick/ 로 재시도
-    deep = f"supertoss://stockpick/{code}"
+    inner = f"https://service.tossinvest.com?nextLandingUrl=/stocks/{code}"
+    deep = f"supertoss://securities?url={quote(inner, safe='')}"
     https = f"https://tossinvest.com/stocks/{code}"
 
     try:
