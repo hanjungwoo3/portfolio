@@ -456,11 +456,11 @@ class TabHoldings(BoxLayout):
         l3.add_widget(_hdr_cell("외국인", COL_C, "right"))
         box.add_widget(l3)
 
-        # Row C: 거래량 |   | 기관
+        # Row C: 거래량 | 연기금 | 기관
         l4 = BoxLayout(orientation="horizontal", size_hint_y=None,
                         height=sp(18), spacing=sp(4))
         l4.add_widget(_hdr_cell("거래량", COL_A, "right"))
-        l4.add_widget(_hdr_cell("", COL_B, "right"))
+        l4.add_widget(_hdr_cell("연기금", COL_B, "right"))
         l4.add_widget(_hdr_cell("기관", COL_C, "right"))
         box.add_widget(l4)
         return box
@@ -676,13 +676,15 @@ class TabHoldings(BoxLayout):
                                col=COL_C))
         box.add_widget(l3)
 
-        # ─── 행 C: 거래량 |   | 기관
+        # ─── 행 C: 거래량 | 연기금 | 기관
         l4 = BoxLayout(orientation="horizontal", size_hint_y=None,
                         height=sp(40), spacing=sp(4))
         l4.add_widget(_cell(format_volume(volume) if volume else "",
                                "", _c("#666") if volume else _c("#aaa"),
                                col=COL_A))
-        l4.add_widget(_cell("", "", _c("#aaa"), col=COL_B))
+        l4.add_widget(_cell(format_signed(pension) if pension else "", "",
+                               _c(sign_color(pension)) if pension else _c("#aaa"),
+                               col=COL_B))
         l4.add_widget(_cell(format_signed(inst) if inst else "", "",
                                _c(sign_color(inst)) if inst else _c("#aaa"),
                                col=COL_C))
