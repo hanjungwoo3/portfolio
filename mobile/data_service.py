@@ -20,35 +20,34 @@ USER_AGENT = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
               "AppleWebKit/537.36 (KHTML, like Gecko) "
               "Chrome/120.0.0.0 Safari/537.36")
 
-# Yahoo Finance 전용 세션 (cookie/crumb 자동 관리) — yfinance 방식
+# Yahoo 는 Mac UA 로 finance 홈페이지 방문 시 429 유발 사례 확인 → Windows UA 사용
+YAHOO_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36")
+
+# Yahoo Finance 전용 세션 (쿠키만 관리 — crumb 불필요, v8 chart API 사용)
 _yahoo_session = None
-_yahoo_crumb = None
 
 
-def _get_yahoo_session_crumb():
-    """yfinance 와 동일: 쿠키 + crumb 토큰 획득"""
-    global _yahoo_session, _yahoo_crumb
-    if _yahoo_session is not None and _yahoo_crumb is not None:
-        return _yahoo_session, _yahoo_crumb
+def _get_yahoo_session():
+    """finance.yahoo.com 방문으로 A1/A1S/A3 쿠키 획득.
+    v7 quote API 는 2024년 이후 401 차단 → v8 chart API 만 사용.
+    """
+    global _yahoo_session
+    if _yahoo_session is not None:
+        return _yahoo_session
     s = requests.Session()
     s.headers.update({
-        "User-Agent": USER_AGENT,
-        "Accept": "*/*",
-        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": YAHOO_UA,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
     })
     try:
-        # 1) 쿠키 획득 (fc.yahoo.com 404 이어도 Set-Cookie 수신됨)
-        s.get("https://fc.yahoo.com", timeout=5, allow_redirects=True)
-        # 2) crumb 토큰 획득
-        r = s.get("https://query2.finance.yahoo.com/v1/test/getcrumb",
-                    timeout=5)
-        if r.status_code == 200 and r.text:
-            _yahoo_crumb = r.text.strip()
-            _yahoo_session = s
-            return s, _yahoo_crumb
+        s.get("https://finance.yahoo.com", timeout=6, allow_redirects=True)
     except Exception as e:
         print(f"[yahoo-auth] {e}")
-    return s, None
+    _yahoo_session = s
+    return s
 
 # ─── 섹터 메타데이터 (데스크탑과 동일 구조) ────────────────────────────
 TIER0 = [
@@ -122,7 +121,10 @@ _YAHOO_CACHE_TTL = 60  # 1분
 
 
 def fetch_yahoo_batch(symbols: list) -> dict:
-    """yfinance 로 심볼 batch 조회 + 1분 TTL 캐시"""
+    """Yahoo Finance v8 chart API 를 requests 로 직접 호출 (yfinance 미사용).
+    v7 quote API 는 2024년 이후 401 차단되어 v8 chart 만 사용.
+    Android 빌드 경량화: pandas/numpy 등 무거운 의존성 제거. 1분 TTL 캐시.
+    """
     if not symbols:
         return {}
     # 캐시 유효하면 그대로 반환 (전체 심볼 있을 때만)
@@ -133,31 +135,32 @@ def fetch_yahoo_batch(symbols: list) -> dict:
         if len(existing) == len(symbols):
             return existing
 
-    try:
-        import yfinance as yf
-    except ImportError:
-        print("[yahoo] yfinance not installed")
-        return {}
+    session = _get_yahoo_session()
 
-    out = {}
-    from concurrent.futures import ThreadPoolExecutor
-
-    def _fetch(sym):
+    def _chart(sym):
         try:
-            t = yf.Ticker(sym)
-            info = t.info
-            price = info.get("regularMarketPrice")
-            prev = info.get("regularMarketPreviousClose")
+            r = session.get(
+                f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}",
+                params={"range": "2d", "interval": "1d"}, timeout=6)
+            if r.status_code != 200:
+                return sym, None
+            res = ((r.json().get("chart") or {}).get("result") or [])
+            if not res:
+                return sym, None
+            meta = res[0].get("meta") or {}
+            price = meta.get("regularMarketPrice")
+            prev = meta.get("chartPreviousClose") or meta.get("previousClose")
             if price is not None and prev is not None:
                 return sym, {"price": float(price), "prev": float(prev)}
         except Exception as e:
-            print(f"[yahoo] {sym}: {e}")
+            print(f"[yahoo-chart] {sym}: {e}")
         return sym, None
 
+    out = {}
     with ThreadPoolExecutor(max_workers=min(len(symbols), 8)) as pool:
-        for sym, data in pool.map(_fetch, symbols):
-            if data:
-                out[sym] = data
+        for sym, q in pool.map(_chart, symbols):
+            if q:
+                out[sym] = q
 
     _yahoo_cache["data"].update(out)
     _yahoo_cache["ts"] = time.time()
