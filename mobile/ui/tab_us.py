@@ -186,31 +186,32 @@ class TabUS(BoxLayout):
 
     @staticmethod
     def _us_market_closed() -> bool:
-        """미국 정규장(NYSE) 한국시간 기준 대략 23:30 ~ 06:00 외에는 휴장."""
+        """미국 정규장(NYSE) 한국시간 기준 대략 23:30 ~ 06:00 외에는 휴장.
+        Android tzdata 미설치 대응: UTC+9 고정 오프셋 사용."""
         try:
-            from datetime import datetime
-            from zoneinfo import ZoneInfo
-            now = datetime.now(ZoneInfo("Asia/Seoul"))
+            from datetime import datetime, timezone, timedelta
+            now = datetime.now(timezone(timedelta(hours=9)))
             if now.weekday() >= 5:
                 return True
             hhmm = now.hour * 60 + now.minute
             return not (hhmm >= (23 * 60 + 30) or hhmm < 6 * 60)
-        except Exception:
-            return False
+        except Exception as e:
+            print(f"[us-session] {e}")
+            return True
 
     @staticmethod
     def _kr_market_closed() -> bool:
         """KOSPI/KOSDAQ 정규장: 한국시간 09:00 ~ 15:20 이외 휴장."""
         try:
-            from datetime import datetime
-            from zoneinfo import ZoneInfo
-            now = datetime.now(ZoneInfo("Asia/Seoul"))
+            from datetime import datetime, timezone, timedelta
+            now = datetime.now(timezone(timedelta(hours=9)))
             if now.weekday() >= 5:
                 return True
             hhmm = now.hour * 60 + now.minute
             return not (9 * 60 <= hhmm < 15 * 60 + 20)
-        except Exception:
-            return False
+        except Exception as e:
+            print(f"[kr-session] {e}")
+            return True
 
     # 한국 심볼 (zZ는 한국장 휴장시)
     _KR_SYMBOLS = {"^KS200", "^KQ11"}

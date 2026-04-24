@@ -5,7 +5,10 @@
 행 3: 거래량                          현재가     전일대비%
 """
 import threading
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+# Android 에 tzdata 없어도 동작하도록 UTC+9 오프셋 직접 사용 (zoneinfo 미사용)
+KST = timezone(timedelta(hours=9))
 
 from kivy.clock import mainthread
 from kivy.metrics import sp
@@ -57,10 +60,9 @@ from data_service import (fetch_toss_prices_batch, sign_color, format_signed,
 
 
 def kr_session_phase() -> str:
-    """REGULAR(09:00-15:20 평일) | EXTENDED | CLOSED"""
+    """REGULAR(09:00-15:20 평일) | EXTENDED | CLOSED — KST 고정 오프셋"""
     try:
-        from zoneinfo import ZoneInfo
-        now = datetime.now(ZoneInfo("Asia/Seoul"))
+        now = datetime.now(KST)
         if now.weekday() >= 5:
             return "CLOSED"
         hhmm = now.hour * 60 + now.minute
@@ -69,8 +71,9 @@ def kr_session_phase() -> str:
         if (8 * 60 <= hhmm < 8 * 60 + 50) or (15 * 60 + 30 <= hhmm < 20 * 60):
             return "EXTENDED"
         return "CLOSED"
-    except Exception:
-        return "REGULAR"
+    except Exception as e:
+        print(f"[kr-session] {e}")
+        return "CLOSED"
 
 FONT_XS = sp(11)
 FONT_SMALL = sp(12)

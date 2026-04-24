@@ -157,8 +157,8 @@ class TabWatch(BoxLayout):
     @staticmethod
     def _session_phase() -> str:
         try:
-            from zoneinfo import ZoneInfo
-            now = datetime.now(ZoneInfo("Asia/Seoul"))
+            from datetime import timezone, timedelta
+            now = datetime.now(timezone(timedelta(hours=9)))
             if now.weekday() >= 5:
                 return "CLOSED"
             hhmm = now.hour * 60 + now.minute
@@ -167,8 +167,9 @@ class TabWatch(BoxLayout):
             if (8 * 60 <= hhmm < 8 * 60 + 50) or (15 * 60 + 30 <= hhmm < 20 * 60):
                 return "EXTENDED"
             return "CLOSED"
-        except Exception:
-            return "REGULAR"
+        except Exception as e:
+            print(f"[watch-session] {e}")
+            return "CLOSED"
 
     def _is_sleeping_stock(self, ticker: str, volume: int) -> bool:
         phase = self._session_phase()
