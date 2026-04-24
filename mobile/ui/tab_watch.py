@@ -231,21 +231,29 @@ class TabWatch(BoxLayout):
                 color=rgba("#666"), halign=halign, valign="middle",
                 size_hint_x=sx))
 
-        # Row 1: 현재가 | 전일대비(%) | 외국인 — 데이터 셀과 동일 우측정렬
+        # Row A: (공백) | 피크가(%) | 거래량
         r1 = BoxLayout(orientation="horizontal", size_hint_y=None,
                         height=sp(18), spacing=sp(4))
-        r1.add_widget(_hdr("현재가", COL_A, "right"))
-        r1.add_widget(_hdr("전일대비 (%)", COL_B, "right"))
-        r1.add_widget(_hdr("외국인", COL_C, "right"))
+        r1.add_widget(_hdr("", COL_A, "right"))
+        r1.add_widget(_hdr("피크가 (%)", COL_B, "right"))
+        r1.add_widget(_hdr("거래량", COL_C, "right"))
         box.add_widget(r1)
 
-        # Row 2: 목표가(%) | 피크가(%) | 기관
+        # Row B: (공백) | 목표가(%) | 외국인보유%
         r2 = BoxLayout(orientation="horizontal", size_hint_y=None,
                         height=sp(18), spacing=sp(4))
-        r2.add_widget(_hdr("목표가 (%)", COL_A, "right"))
-        r2.add_widget(_hdr("피크가 (%)", COL_B, "right"))
-        r2.add_widget(_hdr("기관", COL_C, "right"))
+        r2.add_widget(_hdr("", COL_A, "right"))
+        r2.add_widget(_hdr("목표가 (%)", COL_B, "right"))
+        r2.add_widget(_hdr("외국인보유%", COL_C, "right"))
         box.add_widget(r2)
+
+        # Row C: 외국인 | 연기금 | 기관
+        r3 = BoxLayout(orientation="horizontal", size_hint_y=None,
+                        height=sp(18), spacing=sp(4))
+        r3.add_widget(_hdr("외국인", COL_A, "right"))
+        r3.add_widget(_hdr("연기금", COL_B, "right"))
+        r3.add_widget(_hdr("기관", COL_C, "right"))
+        box.add_widget(r3)
         return box
 
     def _build_row(self, stock, price_info, peaks):
@@ -290,6 +298,7 @@ class TabWatch(BoxLayout):
         inst = flow.get("기관") if flow else None
         foreign = flow.get("외국인") if flow else None
         foreign_ratio = flow.get("외국인비율", 0) if flow else 0
+        pension = flow.get("연기금") if flow else None
 
         # 컨테이너
         box = BoxLayout(orientation="vertical", size_hint_y=None,
@@ -313,8 +322,8 @@ class TabWatch(BoxLayout):
         l1_wrap = TappableBox(orientation="vertical", size_hint_y=None,
                                 height=sp(52), padding=(sp(4), sp(2)))
         l1_wrap.bind(on_release=lambda *_: open_toss_stock(t))
-        l1 = BoxLayout(orientation="vertical", size_hint_y=None,
-                        height=sp(48), padding=(sp(10), sp(4)), spacing=sp(1))
+        l1 = BoxLayout(orientation="horizontal", size_hint_y=None,
+                        height=sp(48), padding=(sp(10), sp(4)), spacing=sp(6))
         l1_wrap.add_widget(l1)
         name_bg = _c("#dce6f2") if not is_sleeping else _c("#ececec")
         from kivy.graphics import RoundedRectangle as _RR
@@ -326,51 +335,77 @@ class TabWatch(BoxLayout):
 
         prefix = "zZ " if is_sleeping else ""
 
-        # Line 1: 종목명 (거래량:xx) [뱃지]
-        line_top = BoxLayout(orientation="horizontal", size_hint_y=None,
-                              height=sp(26), spacing=sp(4))
-        name_text = f"{prefix}{name} (거래량:{format_volume(volume)})"
+        # 카드 50/50 — 좌: 종목명 + 섹터 / 우: 오늘 +금액 (%)
+        left_col = BoxLayout(orientation="vertical", size_hint_x=0.5,
+                              spacing=sp(1))
+        name_line = BoxLayout(orientation="horizontal", size_hint_y=None,
+                               height=sp(24), spacing=sp(4))
+        name_text = f"{prefix}{name}"
         name_lbl = Label(
-            text=name_text, bold=name_bold, font_size=FONT_XL,
+            text=name_text, bold=name_bold, font_size=FONT_LG,
             color=rgba(_c(diff_color)),
             size_hint=(None, 1),
             halign="left", valign="middle")
         name_lbl.bind(texture_size=lambda w, v: setattr(w, "width", v[0]))
-        line_top.add_widget(name_lbl)
+        name_line.add_widget(name_lbl)
 
         if badge_text:
             from kivy.graphics import Color as _Col, RoundedRectangle
-            badge_w = sp(30)
+            badge_w = sp(28)
             badge = Label(
                 text=badge_text, bold=True, font_size=sp(10),
                 color=rgba(_c("#ffffff")),
-                size_hint=(None, None), width=badge_w, height=sp(18),
+                size_hint=(None, None), width=badge_w, height=sp(16),
                 halign="center", valign="middle",
-                text_size=(badge_w, sp(18)))
+                text_size=(badge_w, sp(16)))
             with badge.canvas.before:
                 _Col(*rgba(_c(badge_bg)))
                 badge._bg = RoundedRectangle(pos=badge.pos, size=badge.size,
                                               radius=[sp(4)])
             badge.bind(pos=lambda w, v: setattr(w._bg, "pos", v),
                         size=lambda w, v: setattr(w._bg, "size", v))
-            line_top.add_widget(badge)
-        line_top.add_widget(BoxLayout())  # 우측 스페이서
-        l1.add_widget(line_top)
+            name_line.add_widget(badge)
+        name_line.add_widget(BoxLayout())
+        left_col.add_widget(name_line)
 
-        # Line 2: 섹터:xxx  외국인:xx.xx% 보유
-        sub_parts = []
-        if sector:
-            sub_parts.append(f"섹터:{sector}")
-        if foreign_ratio and foreign_ratio > 0:
-            sub_parts.append(f"외국인:{foreign_ratio:.2f}% 보유")
-        line_bot = Label(
-            text="   ".join(sub_parts),
+        sector_lbl = Label(
+            text=sector,
             font_size=FONT_SMALL, color=rgba(_c("#666")),
             size_hint_y=None, height=sp(18),
             halign="left", valign="middle",
             max_lines=1, shorten=True, shorten_from="right")
-        line_bot.bind(size=lambda w, v: setattr(w, "text_size", v))
-        l1.add_widget(line_bot)
+        sector_lbl.bind(size=lambda w, v: setattr(w, "text_size", v))
+        left_col.add_widget(sector_lbl)
+        l1.add_widget(left_col)
+
+        # 우측 — 오늘 +금액 (%)
+        right_col = BoxLayout(orientation="vertical", size_hint_x=0.5,
+                               spacing=sp(1))
+        color_hex = _c(diff_color).lstrip("#")
+        big_px = int(sp(15))
+        today_text = (f"[color=222222]오늘[/color] "
+                      f"[color={color_hex}]"
+                      f"[size={big_px}][b]{format_signed(diff)}[/b][/size] "
+                      f"({pct:+.2f}%)[/color]")
+        today_lbl = Label(
+            text=today_text, markup=True, font_size=FONT_SMALL,
+            color=rgba(_c("#222")),
+            size_hint_y=None, height=sp(24),
+            halign="left", valign="middle",
+            max_lines=1, shorten=True, shorten_from="right")
+        today_lbl.bind(size=lambda w, v: setattr(w, "text_size", v))
+        right_col.add_widget(today_lbl)
+        # 두번째 줄은 현재가 표시 (비어있으면 어색하니)
+        price_text = f"[color=444444]{price:,}[/color]" if price else ""
+        price_lbl = Label(
+            text=price_text, markup=True, font_size=FONT_SMALL,
+            color=rgba(_c("#444")),
+            size_hint_y=None, height=sp(18),
+            halign="left", valign="middle",
+            max_lines=1, shorten=True, shorten_from="right")
+        price_lbl.bind(size=lambda w, v: setattr(w, "text_size", v))
+        right_col.add_widget(price_lbl)
+        l1.add_widget(right_col)
 
         box.add_widget(l1_wrap)
 
@@ -381,37 +416,47 @@ class TabWatch(BoxLayout):
                 size_hint_x=col, bold=bold,
                 font_size=FONT_MD, height=sp(40))
 
-        # ─── 행 2: 현재가 | 전일대비(%) | 외국인
+        # ─── 행 A: (공백) | 피크가(%) | 거래량
         l2 = BoxLayout(orientation="horizontal", size_hint_y=None,
                         height=sp(40), spacing=sp(4))
-        l2.add_widget(_cell(f"{price:,}" if price else "", "",
-                               _c("#333"), col=COL_A))
-        if diff:
-            l2.add_widget(_cell(format_signed(diff), f"({pct:+.2f}%)",
-                                   _c(diff_color), col=COL_B, bold=name_bold))
+        l2.add_widget(_cell("", "", _c("#aaa"), col=COL_A))
+        if peak:
+            peak_c = _c(sign_color(peak_gap_pct) if peak_gap_pct < 0 else "#888")
+            l2.add_widget(_cell(f"{int(peak):,}", f"({peak_gap_pct:+.2f}%)",
+                                  peak_c, col=COL_B))
         else:
-            l2.add_widget(_cell("0", "", _c(diff_color), col=COL_B))
-        l2.add_widget(_cell(format_signed(foreign) if foreign else "", "",
-                               _c(sign_color(foreign)) if foreign else _c("#aaa"),
+            l2.add_widget(_cell("", "", _c("#aaa"), col=COL_B))
+        l2.add_widget(_cell(format_volume(volume) if volume else "",
+                               "", _c("#666") if volume else _c("#aaa"),
                                col=COL_C))
         box.add_widget(l2)
 
-        # ─── 행 3: 목표가(%) | 피크가(%) | 기관
+        # ─── 행 B: (공백) | 목표가(%) | 외국인보유%
         l3 = BoxLayout(orientation="horizontal", size_hint_y=None,
                         height=sp(40), spacing=sp(4))
+        l3.add_widget(_cell("", "", _c("#aaa"), col=COL_A))
         if target:
             l3.add_widget(_cell(f"{target:,}", f"({target_gap_pct:+.2f}%)",
-                                  _c(sign_color(target_gap_pct)), col=COL_A))
-        else:
-            l3.add_widget(_cell("", "", _c("#aaa"), col=COL_A))
-        if peak:
-            peak_c = _c(sign_color(peak_gap_pct) if peak_gap_pct < 0 else "#888")
-            l3.add_widget(_cell(f"{int(peak):,}", f"({peak_gap_pct:+.2f}%)",
-                                  peak_c, col=COL_B))
+                                  _c(sign_color(target_gap_pct)), col=COL_B))
         else:
             l3.add_widget(_cell("", "", _c("#aaa"), col=COL_B))
-        l3.add_widget(_cell(format_signed(inst) if inst else "", "",
+        l3.add_widget(_cell(
+            f"{foreign_ratio:.2f}%" if foreign_ratio and foreign_ratio > 0 else "",
+            "", _c("#333") if foreign_ratio and foreign_ratio > 0 else _c("#aaa"),
+            col=COL_C))
+        box.add_widget(l3)
+
+        # ─── 행 C: 외국인 | 연기금 | 기관
+        l4 = BoxLayout(orientation="horizontal", size_hint_y=None,
+                        height=sp(40), spacing=sp(4))
+        l4.add_widget(_cell(format_signed(foreign) if foreign else "", "",
+                               _c(sign_color(foreign)) if foreign else _c("#aaa"),
+                               col=COL_A))
+        l4.add_widget(_cell(format_signed(pension) if pension else "", "",
+                               _c(sign_color(pension)) if pension else _c("#aaa"),
+                               col=COL_B))
+        l4.add_widget(_cell(format_signed(inst) if inst else "", "",
                                _c(sign_color(inst)) if inst else _c("#aaa"),
                                col=COL_C))
-        box.add_widget(l3)
+        box.add_widget(l4)
         return box
