@@ -151,10 +151,20 @@ class PortfolioApp(App):
 
         root.add_widget(header)
 
-        # ─── Carousel 본문 (좌우 스와이프) ────────────
-        self.carousel = Carousel(direction="right", loop=False,
-                                   anim_move_duration=0.18,
-                                   scroll_distance=sp(20))
+        # ─── Carousel 본문 (좌우 스와이프 비활성, 버튼 전용) ────────────
+        # 세로 ScrollView 와 제스처가 충돌해 스크롤이 끊기는 문제 해결
+        from kivy.uix.floatlayout import FloatLayout
+        class _SwipelessCarousel(Carousel):
+            """터치 이벤트를 자식에 그대로 전달 (스와이프 제스처 감지 스킵)."""
+            def on_touch_down(self, touch):
+                return FloatLayout.on_touch_down(self, touch)
+            def on_touch_move(self, touch):
+                return FloatLayout.on_touch_move(self, touch)
+            def on_touch_up(self, touch):
+                return FloatLayout.on_touch_up(self, touch)
+
+        self.carousel = _SwipelessCarousel(direction="right", loop=False,
+                                             anim_move_duration=0.18)
         self.tab_us = TabUS()
         self.tab_holdings = TabHoldings(self.holdings_data)
         self.tab_watch = TabWatch(self.holdings_data)

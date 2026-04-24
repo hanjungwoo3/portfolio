@@ -40,9 +40,9 @@ def kr_session_phase() -> str:
 
 FONT_XS = sp(11)
 FONT_SMALL = sp(12)
-FONT_MD = sp(14)
-FONT_LG = sp(15)
-FONT_XL = sp(17)
+FONT_MD = sp(16)
+FONT_LG = sp(17)
+FONT_XL = sp(19)
 
 # 매도 수수료 0.2% (토스 기준) — 데스크탑과 동일
 SELL_FEE_PCT = 0.2
@@ -109,9 +109,9 @@ def make_amt_pct_cell(amt_text: str, pct_text: str,
                         font_size=None, height=None):
     """금액 + (%) 를 세로 2단 스택으로 렌더 — 금액 위 / pct 아래 작은 폰트.
     둘 다 오른쪽 정렬. 가로 공간 전체를 써서 ellipsis 발생 최소화."""
-    fs = font_size or sp(14)
-    pct_fs = sp(10)
-    h = height or sp(34)
+    fs = font_size or sp(16)
+    pct_fs = sp(12)
+    h = height or sp(40)
     # pct 가 없으면 amt 만 중앙 정렬된 것처럼 보이게 상/하 공백 균등 분배
     wrap = BoxLayout(orientation="vertical", size_hint_x=size_hint_x,
                       size_hint_y=None, height=h, spacing=0)
@@ -582,11 +582,11 @@ class TabHoldings(BoxLayout):
             return make_amt_pct_cell(
                 amt, pct, amt_color, pct_color or amt_color,
                 size_hint_x=col, bold=bold,
-                font_size=FONT_MD, height=sp(34))
+                font_size=FONT_MD, height=sp(40))
 
         # ─── 행 2: 매수가 | 손익금액(%) | 외국인
         l2 = BoxLayout(orientation="horizontal", size_hint_y=None,
-                        height=sp(34), spacing=sp(4))
+                        height=sp(40), spacing=sp(4))
         l2.add_widget(_cell(f"{avg:,}", "", _c("#666"), col=COL_A))
         l2.add_widget(_cell(format_signed(pnl), f"({pnl_pct:+.2f}%)",
                                _c(sign_color(pnl)), col=COL_B, bold=name_bold))
@@ -597,7 +597,7 @@ class TabHoldings(BoxLayout):
 
         # ─── 행 3: 현재가 | 전일대비(%) | 기관
         l3 = BoxLayout(orientation="horizontal", size_hint_y=None,
-                        height=sp(34), spacing=sp(4))
+                        height=sp(40), spacing=sp(4))
         l3.add_widget(_cell(f"{cur_price:,}", "", _c("#333"), col=COL_A))
         l3.add_widget(_cell(format_signed(day_diff), f"({day_pct:+.2f}%)",
                                _c(sign_color(day_diff)), col=COL_B, bold=name_bold))
@@ -608,7 +608,7 @@ class TabHoldings(BoxLayout):
 
         # ─── 행 4: 목표가(%) | 피크가(%) | 연기금
         l4 = BoxLayout(orientation="horizontal", size_hint_y=None,
-                        height=sp(34), spacing=sp(4))
+                        height=sp(40), spacing=sp(4))
         if target:
             l4.add_widget(_cell(f"{target:,}", f"({target_gap_pct:+.2f}%)",
                                   _c(sign_color(target_gap_pct)), col=COL_A))
@@ -642,39 +642,33 @@ class TabHoldings(BoxLayout):
         box.bind(pos=lambda w, v: setattr(w._bg, "pos", v),
                   size=lambda w, v: setattr(w._bg, "size", v))
 
-        # 행 1: 매수가 합계 | invested | 누적손익(%)
-        l1 = BoxLayout(orientation="horizontal", size_hint_y=None,
-                        height=sp(34), spacing=sp(4))
-        l1.add_widget(Label(
-            text="매수가 합계", bold=True, font_size=FONT_MD,
-            color=rgba("#000"), size_hint_x=COL_A, halign="left",
-            valign="middle", text_size=(None, sp(34))))
-        l1.add_widget(Label(
-            text=f"{int(invested):,}원", bold=True, font_size=FONT_MD,
-            color=rgba("#222"), size_hint_x=COL_B, halign="right",
-            valign="middle", text_size=(None, sp(34))))
-        l1.add_widget(make_amt_pct_cell(
-            format_signed(pnl), f"({pnl_pct:+.2f}%)",
-            sign_color(pnl), sign_color(pnl),
-            size_hint_x=COL_C, bold=True,
-            font_size=FONT_MD, height=sp(34)))
-        box.add_widget(l1)
+        # 행 1: 매수가: 1,935,296      전체손익: +139,645 (+7.22%)
+        row_h = sp(28)
+        def _row(left_text, right_text, right_color):
+            row = BoxLayout(orientation="horizontal", size_hint_y=None,
+                             height=row_h, spacing=sp(4))
+            left = Label(
+                text=left_text, bold=True, font_size=FONT_MD,
+                color=rgba("#222"), size_hint_x=0.5,
+                halign="left", valign="middle",
+                max_lines=1, shorten=True, shorten_from="right")
+            left.bind(size=lambda w, v: setattr(w, "text_size", v))
+            row.add_widget(left)
+            right = Label(
+                text=right_text, bold=True, font_size=FONT_MD,
+                color=rgba(right_color), size_hint_x=0.5,
+                halign="right", valign="middle",
+                max_lines=1, shorten=True, shorten_from="left")
+            right.bind(size=lambda w, v: setattr(w, "text_size", v))
+            row.add_widget(right)
+            return row
 
-        # 행 2: 현재가 합계 | current | 전일대비(%)
-        l2 = BoxLayout(orientation="horizontal", size_hint_y=None,
-                        height=sp(34), spacing=sp(4))
-        l2.add_widget(Label(
-            text="현재가 합계", bold=True, font_size=FONT_MD,
-            color=rgba("#000"), size_hint_x=COL_A, halign="left",
-            valign="middle", text_size=(None, sp(34))))
-        l2.add_widget(Label(
-            text=f"{int(current):,}원", bold=True, font_size=FONT_MD,
-            color=rgba("#222"), size_hint_x=COL_B, halign="right",
-            valign="middle", text_size=(None, sp(34))))
-        l2.add_widget(make_amt_pct_cell(
-            format_signed(day_diff), f"({day_pct:+.2f}%)",
-            sign_color(day_diff), sign_color(day_diff),
-            size_hint_x=COL_C, bold=True,
-            font_size=FONT_MD, height=sp(34)))
-        box.add_widget(l2)
+        box.add_widget(_row(
+            f"매수가: {int(invested):,}",
+            f"전체손익: {format_signed(pnl)} ({pnl_pct:+.2f}%)",
+            sign_color(pnl)))
+        box.add_widget(_row(
+            f"현재가: {int(current):,}",
+            f"전일대비: {format_signed(day_diff)} ({day_pct:+.2f}%)",
+            sign_color(day_diff)))
         return box
