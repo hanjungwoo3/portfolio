@@ -163,39 +163,107 @@ class TabUS(BoxLayout):
         row.add_widget(_h("등락%", self.PCT_W, "right"))
         return row
 
-    # ─── Tier 0 ────────────────────────────────────────────────
+    # ─── Tier 0 (2 x 2 그리드 카드) ────────────────────────────
     def _build_tier0(self, indices):
+        """데스크톱 스타일 — 2개씩 한 줄, 2줄 카드 (이름/가격/등락% + 설명).
+        각 카드는 둥근 배경으로 시각 구분."""
         wrap = BoxLayout(orientation="vertical", size_hint_y=None,
-                          spacing=0, padding=0)
+                          spacing=sp(6), padding=(sp(6), sp(6)))
         wrap.bind(minimum_height=wrap.setter("height"))
-        _bg(wrap, "#2c3e50")
-        for idx in indices:
-            wrap.add_widget(self._tier0_row(idx))
+        _bg(wrap, "#2c3e50")  # 바깥 어두운 배경
+
+        # 2개씩 묶어서 행 구성
+        for i in range(0, len(indices), 2):
+            pair = indices[i:i + 2]
+            row = BoxLayout(orientation="horizontal", size_hint_y=None,
+                             height=sp(56), spacing=sp(6))
+            for idx in pair:
+                row.add_widget(self._tier0_card(idx))
+            if len(pair) == 1:
+                row.add_widget(BoxLayout())  # 빈 자리
+            wrap.add_widget(row)
         return wrap
 
-    def _tier0_row(self, idx):
-        """1줄/항목: [이름 (설명)] [가격] [등락%]"""
+    @staticmethod
+    def _us_market_closed() -> bool:
+        """미국 정규장(NYSE) 한국시간 기준 대략 22:30 ~ 05:00 외에는 휴장.
+        간단 판단 (DST 무시): Seoul 23:30–06:00 만 장중으로 간주."""
+        try:
+            from datetime import datetime
+            from zoneinfo import ZoneInfo
+            now = datetime.now(ZoneInfo("Asia/Seoul"))
+            if now.weekday() >= 5:
+                return True
+            hhmm = now.hour * 60 + now.minute
+            # 23:30 ~ 06:00 사이만 열려있다고 봄
+            return not (hhmm >= (23 * 60 + 30) or hhmm < 6 * 60)
+        except Exception:
+            return False
+
+    def _tier0_card(self, idx):
+        """2줄 카드: Line 1 [zZ 이름 가격 등락%] + Line 2 [설명] — 둥근 배경."""
         pct = idx.get("pct", 0)
         pct_color = "#ff6b6b" if pct > 0 else "#5dade2" if pct < 0 else "#bbb"
         note = idx.get("note", "")
-        name_text = (f"{idx['name']}  ({note})" if note else idx["name"])
-        row = BoxLayout(orientation="horizontal", size_hint_y=None,
-                         height=sp(26), padding=(sp(10), sp(2)),
-                         spacing=sp(4))
-        row.add_widget(Label(
-            text=name_text, bold=True, color=rgba("#fff"),
-            font_size=FONT_SMALL, halign="left", valign="middle",
-            size_hint_x=0.55, text_size=(None, sp(26)),
-            shorten=True, shorten_from="right"))
-        row.add_widget(Label(
+
+        # zZ 마커 — 심볼별 시장 상태 기반 (^VIX/^GSPC는 US 시간, EWY·USD/KRW는 예외 처리)
+        symbol = idx.get("symbol", "")
+        us_only_symbols = {"^VIX", "^GSPC", "EWY"}  # 미국 시장 종속
+        show_zzz = symbol in us_only_symbols and self._us_market_closed()
+
+        card = BoxLayout(orientation="vertical", size_hint_y=None,
+                          height=sp(56), padding=(sp(10), sp(6)),
+                          spacing=sp(1))
+
+        # 카드 배경 (약간 밝은 블루그레이 + 둥근 모서리)
+        from kivy.graphics import Color, RoundedRectangle
+        with card.canvas.before:
+            Color(*rgba("#3c5470"))
+            card._bg = RoundedRectangle(pos=card.pos, size=card.size,
+                                          radius=[sp(8)])
+        card.bind(pos=lambda w, v: setattr(w._bg, "pos", v),
+                   size=lambda w, v: setattr(w._bg, "size", v))
+
+        # Line 1: [zZ] 이름 / 가격 / 등락%
+        line1 = BoxLayout(orientation="horizontal", size_hint_y=None,
+                           height=sp(24), spacing=sp(4))
+        if show_zzz:
+            zzz_lbl = Label(
+                text="zZ", bold=True, color=rgba("#7aa3d4"),
+                font_size=FONT_XS, halign="left", valign="middle",
+                size_hint_x=None)
+            zzz_lbl.bind(texture_size=lambda w, v: setattr(w, "width", v[0]))
+            line1.add_widget(zzz_lbl)
+        name_lbl = Label(
+            text=idx['name'], bold=True, color=rgba("#fff"),
+            font_size=FONT_MD, halign="left", valign="middle",
+            size_hint_x=None)
+        name_lbl.bind(texture_size=lambda w, v: setattr(w, "width", v[0]))
+        line1.add_widget(name_lbl)
+        price_lbl = Label(
             text=f"{idx['price']:,.2f}", color=rgba("#ecf0f1"),
-            font_size=FONT_SMALL, halign="right", valign="middle",
-            size_hint_x=0.22, text_size=(None, sp(26))))
-        row.add_widget(Label(
+            font_size=FONT_SMALL, halign="left", valign="middle",
+            max_lines=1, shorten=True, shorten_from="left")
+        price_lbl.bind(size=lambda w, v: setattr(w, "text_size", v))
+        line1.add_widget(price_lbl)
+        pct_lbl = Label(
             text=f"{pct:+.2f}%", bold=True, color=rgba(pct_color),
-            font_size=FONT_SMALL, halign="right", valign="middle",
-            size_hint_x=0.23, text_size=(None, sp(26))))
-        return row
+            font_size=FONT_MD, halign="right", valign="middle",
+            size_hint_x=None)
+        pct_lbl.bind(texture_size=lambda w, v: setattr(w, "width", v[0]))
+        line1.add_widget(pct_lbl)
+        card.add_widget(line1)
+
+        # Line 2: 설명 (note) — 데스크톱과 동일 문구
+        note_lbl = Label(
+            text=note, color=rgba("#b0bec5"),
+            font_size=FONT_XS, halign="left", valign="middle",
+            size_hint_y=None, height=sp(18),
+            max_lines=1, shorten=True, shorten_from="right")
+        note_lbl.bind(size=lambda w, v: setattr(w, "text_size", v))
+        card.add_widget(note_lbl)
+
+        return card
 
     # ─── 섹터 행 (좌측 섹터 라벨 + 우측 지표/ETF 스택) ────────
     def _build_sector_row(self, sec_label, indicators, etf_tickers):

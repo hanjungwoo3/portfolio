@@ -53,9 +53,9 @@ def _get_yahoo_session_crumb():
 # ─── 섹터 메타데이터 (데스크탑과 동일 구조) ────────────────────────────
 TIER0 = [
     ("EWY", "EWY", "MSCI Korea — 외국인 투심", "direct"),
-    ("KRW=X", "USD/KRW", "원달러 환율", "inverse"),
-    ("^VIX", "VIX", "공포지수", "inverse"),
-    ("^GSPC", "S&P 500", "미국 대형주", "direct"),
+    ("KRW=X", "USD/KRW", "원달러 환율 — 수출주·외국인 수급", "inverse"),
+    ("^VIX", "VIX", "공포지수 — 20↑ 경계, 30↑ 공포", "inverse"),
+    ("^GSPC", "S&P 500", "미국 대형주 — 글로벌 리스크 온/오프", "direct"),
 ]
 
 SECTOR_INDICATORS = [
