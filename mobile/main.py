@@ -5,31 +5,94 @@
 - 좌우 스와이프 + 화살표 버튼으로 탭 전환 (Carousel)
 - 앱이 foreground 일 때만 5초 간격 자동 갱신
 """
+import sys
+import traceback
 from pathlib import Path
 
-from kivy.app import App
-from kivy.clock import Clock
-from kivy.core.text import LabelBase
-from kivy.core.window import Window
-from kivy.metrics import sp
-from kivy.uix.boxlayout import BoxLayout
-from kivy.uix.button import Button
-from kivy.uix.carousel import Carousel
-from kivy.uix.label import Label
+# ─── 크래시 디버깅: 예외를 화면에 표시 ─────────────────────────
+# 앱 어디서든 예외 발생 시 스택 트레이스를 Label 로 띄운다.
+_BOOT_ERROR = None
 
-SCRIPT_DIR = Path(__file__).resolve().parent
 
-# 한글 폰트 등록
-_KR_FONT = SCRIPT_DIR / "assets" / "NotoSansKR.ttf"
-if _KR_FONT.exists():
-    LabelBase.register(name="Roboto",
-                        fn_regular=str(_KR_FONT),
-                        fn_bold=str(_KR_FONT))
+def _show_error_and_exit(msg: str):
+    """Kivy 가 뜬 상태라면 루트를 에러 화면으로 교체."""
+    from kivy.app import App
+    from kivy.uix.scrollview import ScrollView
+    from kivy.uix.label import Label
+    from kivy.metrics import sp
 
-from data_service import load_holdings
-from ui.tab_us import TabUS
-from ui.tab_holdings import TabHoldings
-from ui.tab_watch import TabWatch
+    app = App.get_running_app()
+    sv = ScrollView()
+    lbl = Label(text=msg, font_size=sp(10), color=(1, 0.3, 0.3, 1),
+                 halign="left", valign="top",
+                 size_hint_y=None, padding=(sp(8), sp(8)))
+    lbl.bind(texture_size=lambda w, v: setattr(w, "height", v[1]))
+    lbl.bind(width=lambda w, v: setattr(w, "text_size", (v, None)))
+    sv.add_widget(lbl)
+    if app and app.root:
+        app.root.clear_widgets()
+        app.root.add_widget(sv)
+
+
+def _excepthook(exc_type, exc_value, tb):
+    msg = "".join(traceback.format_exception(exc_type, exc_value, tb))
+    print("[CRASH]", msg)
+    try:
+        _show_error_and_exit(msg)
+    except Exception as e:
+        print(f"[CRASH-DISPLAY-FAIL] {e}")
+
+
+sys.excepthook = _excepthook
+
+try:
+    from kivy.app import App
+    from kivy.clock import Clock
+    from kivy.core.text import LabelBase
+    from kivy.core.window import Window
+    from kivy.metrics import sp
+    from kivy.uix.boxlayout import BoxLayout
+    from kivy.uix.button import Button
+    from kivy.uix.carousel import Carousel
+    from kivy.uix.label import Label
+
+    SCRIPT_DIR = Path(__file__).resolve().parent
+
+    # 한글 폰트 등록
+    _KR_FONT = SCRIPT_DIR / "assets" / "NotoSansKR.ttf"
+    if _KR_FONT.exists():
+        LabelBase.register(name="Roboto",
+                            fn_regular=str(_KR_FONT),
+                            fn_bold=str(_KR_FONT))
+
+    from data_service import load_holdings
+    from ui.tab_us import TabUS
+    from ui.tab_holdings import TabHoldings
+    from ui.tab_watch import TabWatch
+except Exception:
+    _BOOT_ERROR = traceback.format_exc()
+    print("[BOOT-CRASH]", _BOOT_ERROR)
+    # Kivy 가 import 되었기를 기대하며 최소 앱으로 에러를 띄운다.
+    from kivy.app import App
+    from kivy.uix.scrollview import ScrollView
+    from kivy.uix.label import Label
+    from kivy.metrics import sp
+
+    class _ErrorApp(App):
+        def build(self):
+            sv = ScrollView()
+            lbl = Label(text=_BOOT_ERROR, font_size=sp(10),
+                         color=(1, 0.3, 0.3, 1),
+                         halign="left", valign="top",
+                         size_hint_y=None, padding=(sp(8), sp(8)))
+            lbl.bind(texture_size=lambda w, v: setattr(w, "height", v[1]))
+            lbl.bind(width=lambda w, v: setattr(w, "text_size", (v, None)))
+            sv.add_widget(lbl)
+            return sv
+
+    if __name__ == "__main__":
+        _ErrorApp().run()
+    raise SystemExit(0)
 
 HOLDINGS_PATH = SCRIPT_DIR / "holdings.json"
 
@@ -119,8 +182,13 @@ class PortfolioApp(App):
                 from kivy.animation import Animation
                 anim = Animation(opacity=0.4, duration=0.1) + Animation(opacity=1.0, duration=0.15)
                 anim.start(self.title_lbl)
-        except Exception as e:
-            print(f"[view-refresh] {e}")
+        except Exception:
+            msg = traceback.format_exc()
+            print(f"[view-refresh] {msg}")
+            try:
+                _show_error_and_exit(msg)
+            except Exception:
+                pass
 
     # ─── 라이프사이클 ────────────────────────────────
     def on_pause(self):

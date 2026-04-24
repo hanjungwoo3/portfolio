@@ -4,6 +4,7 @@
 재사용 가능: 데스크탑 앱의 Toss/Naver 페칭 로직
 신규: Yahoo Finance v7 quote API 로 yfinance 대체 (Android 빌드 경량화)
 """
+from __future__ import annotations  # Android Python 버전이 3.9 일 수도 있어 PEP 604 회피
 
 import json
 import re
