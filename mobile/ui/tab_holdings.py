@@ -619,41 +619,41 @@ class TabHoldings(BoxLayout):
         box.bind(pos=lambda w, v: setattr(w._bg, "pos", v),
                   size=lambda w, v: setattr(w._bg, "size", v))
 
-        # 행 1: 합계 | 평가금 | 누적손익(%) | (빈)
+        # 행 1: 매수가 합계 | invested | 누적손익(%)
         l1 = BoxLayout(orientation="horizontal", size_hint_y=None,
                         height=sp(24), spacing=sp(4))
         l1.add_widget(Label(
-            text="합계", bold=True, font_size=FONT_LG,
+            text="매수가 합계", bold=True, font_size=FONT_MD,
             color=rgba("#000"), size_hint_x=COL_NAME, halign="left",
             valign="middle", text_size=(None, sp(24))))
         l1.add_widget(Label(
-            text=f"{int(current):,}원", bold=True, font_size=FONT_SMALL,
+            text=f"{int(invested):,}원", bold=True, font_size=FONT_MD,
             color=rgba("#222"), size_hint_x=COL_PRICE, halign="right",
             valign="middle", text_size=(None, sp(24))))
         l1.add_widget(Label(
             text=f"{format_signed(pnl)} ({pnl_pct:+.2f}%)",
-            bold=True, font_size=FONT_SMALL,
+            bold=True, font_size=FONT_MD,
             color=rgba(sign_color(pnl)), size_hint_x=COL_PNL, halign="right",
             valign="middle", text_size=(None, sp(24))))
         l1.add_widget(BoxLayout(size_hint_x=COL_PEAK))
         box.add_widget(l1)
 
-        # 행 2: 전일대비 | 전일평가합 | 전일대비(%) | (빈)
+        # 행 2: 현재가 합계 | current | 전일대비(%)
         l2 = BoxLayout(orientation="horizontal", size_hint_y=None,
-                        height=sp(20), spacing=sp(4))
+                        height=sp(24), spacing=sp(4))
         l2.add_widget(Label(
-            text="전일대비", font_size=FONT_SMALL,
-            color=rgba("#888"), size_hint_x=COL_NAME, halign="left",
-            valign="middle", text_size=(None, sp(20))))
+            text="현재가 합계", bold=True, font_size=FONT_MD,
+            color=rgba("#000"), size_hint_x=COL_NAME, halign="left",
+            valign="middle", text_size=(None, sp(24))))
         l2.add_widget(Label(
-            text=f"{int(yesterday):,}원", font_size=FONT_SMALL,
-            color=rgba("#888"), size_hint_x=COL_PRICE, halign="right",
-            valign="middle", text_size=(None, sp(20))))
+            text=f"{int(current):,}원", bold=True, font_size=FONT_MD,
+            color=rgba("#222"), size_hint_x=COL_PRICE, halign="right",
+            valign="middle", text_size=(None, sp(24))))
         l2.add_widget(Label(
             text=f"{format_signed(day_diff)} ({day_pct:+.2f}%)",
-            bold=True, font_size=FONT_SMALL,
+            bold=True, font_size=FONT_MD,
             color=rgba(sign_color(day_diff)), size_hint_x=COL_PNL, halign="right",
-            valign="middle", text_size=(None, sp(20))))
+            valign="middle", text_size=(None, sp(24))))
         l2.add_widget(BoxLayout(size_hint_x=COL_PEAK))
         box.add_widget(l2)
         return box
