@@ -15,10 +15,10 @@ from data_service import (SECTOR_INDICATORS, SECTOR_ETFS,
                            fetch_us_indices, fetch_toss_prices_batch,
                            sign_color)
 
-FONT_XS = sp(11)
-FONT_SMALL = sp(12)
-FONT_MD = sp(14)
-FONT_LG = sp(15)
+FONT_XS = sp(12)
+FONT_SMALL = sp(13)
+FONT_MD = sp(16)
+FONT_LG = sp(17)
 
 
 _NAMED = {"white": "#ffffff", "black": "#000000"}
@@ -176,7 +176,7 @@ class TabUS(BoxLayout):
         for i in range(0, len(indices), 2):
             pair = indices[i:i + 2]
             row = BoxLayout(orientation="horizontal", size_hint_y=None,
-                             height=sp(56), spacing=sp(6))
+                             height=sp(64), spacing=sp(6))
             for idx in pair:
                 row.add_widget(self._tier0_card(idx))
             if len(pair) == 1:
@@ -233,7 +233,7 @@ class TabUS(BoxLayout):
                      and self._is_symbol_sleeping(symbol))
 
         card = BoxLayout(orientation="vertical", size_hint_y=None,
-                          height=sp(56), padding=(sp(10), sp(6)),
+                          height=sp(64), padding=(sp(10), sp(6)),
                           spacing=sp(1))
 
         # 카드 배경 (약간 밝은 블루그레이 + 둥근 모서리)
@@ -247,7 +247,7 @@ class TabUS(BoxLayout):
 
         # Line 1: [zZ] 이름 / 가격 / 등락%
         line1 = BoxLayout(orientation="horizontal", size_hint_y=None,
-                           height=sp(24), spacing=sp(4))
+                           height=sp(28), spacing=sp(4))
         if show_zzz:
             zzz_lbl = Label(
                 text="zZ", bold=True, color=rgba("#7aa3d4"),
@@ -279,7 +279,7 @@ class TabUS(BoxLayout):
         note_lbl = Label(
             text=note, color=rgba("#b0bec5"),
             font_size=FONT_XS, halign="left", valign="middle",
-            size_hint_y=None, height=sp(18),
+            size_hint_y=None, height=sp(20),
             max_lines=1, shorten=True, shorten_from="right")
         note_lbl.bind(size=lambda w, v: setattr(w, "text_size", v))
         card.add_widget(note_lbl)
@@ -289,7 +289,7 @@ class TabUS(BoxLayout):
     # ─── 섹터 행 (좌측 섹터 라벨 + 우측 지표/ETF 스택) ────────
     def _build_sector_row(self, sec_label, indicators, etf_tickers):
         """각 지표가 동적 높이(설명 유무에 따라 다름)라 컨테이너도 동적."""
-        row_h = sp(30)  # ETF 고정 높이
+        row_h = sp(34)  # ETF 고정 높이
 
         outer = BoxLayout(orientation="horizontal", size_hint_y=None,
                            spacing=0, padding=0)
@@ -348,7 +348,7 @@ class TabUS(BoxLayout):
 
         # Line 1: [zZ] name  |  price  |  pct
         line1 = BoxLayout(orientation="horizontal", size_hint_y=None,
-                           height=sp(22), spacing=sp(4))
+                           height=sp(26), spacing=sp(4))
         name_box = BoxLayout(orientation="horizontal", size_hint_x=nw,
                               spacing=sp(3))
         if sleeping:
@@ -369,19 +369,19 @@ class TabUS(BoxLayout):
         line1.add_widget(Label(
             text=f"{idx['price']:,.2f}", color=rgba("#444"),
             font_size=FONT_SMALL, halign="right", valign="middle",
-            size_hint_x=pw, text_size=(None, sp(22))))
+            size_hint_x=pw, text_size=(None, sp(26))))
         line1.add_widget(Label(
             text=f"{pct:+.2f}%", bold=True, color=rgba(sign_color(pct)),
             font_size=FONT_SMALL, halign="right", valign="middle",
-            size_hint_x=ww, text_size=(None, sp(22))))
+            size_hint_x=ww, text_size=(None, sp(26))))
         card.add_widget(line1)
 
         # Line 2: note 작게 회색
         if note:
             note_lbl = Label(
                 text=note, color=rgba("#999"),
-                font_size=sp(10), halign="left", valign="middle",
-                size_hint_y=None, height=sp(14),
+                font_size=sp(12), halign="left", valign="middle",
+                size_hint_y=None, height=sp(16),
                 max_lines=1, shorten=True, shorten_from="right")
             note_lbl.bind(size=lambda w, v: setattr(w, "text_size", v))
             card.add_widget(note_lbl)

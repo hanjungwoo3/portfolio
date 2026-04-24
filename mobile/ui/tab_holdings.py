@@ -108,26 +108,26 @@ def make_amt_pct_cell(amt_text: str, pct_text: str,
                         size_hint_x: float, bold: bool = False,
                         font_size=None, height=None):
     """금액 + (%) 를 세로 2단 스택으로 렌더 — 금액 위 / pct 아래 작은 폰트.
-    둘 다 오른쪽 정렬. 가로 공간 전체를 써서 ellipsis 발생 최소화."""
+    모든 셀이 항상 58/42 분할이라 단일값 셀과 스택 셀의 amt 상단선이 일치.
+    둘 다 오른쪽 정렬 + top 정렬."""
     fs = font_size or sp(16)
     pct_fs = sp(12)
     h = height or sp(40)
-    # pct 가 없으면 amt 만 중앙 정렬된 것처럼 보이게 상/하 공백 균등 분배
     wrap = BoxLayout(orientation="vertical", size_hint_x=size_hint_x,
                       size_hint_y=None, height=h, spacing=0)
     amt = Label(text=amt_text, font_size=fs, bold=bold,
                  color=rgba(amt_color),
-                 halign="right", valign="bottom" if pct_text else "middle",
-                 size_hint_y=0.58 if pct_text else 1.0)
+                 halign="right", valign="top",
+                 size_hint_y=0.58)
     amt.bind(size=lambda w, v: setattr(w, "text_size", v))
     wrap.add_widget(amt)
-    if pct_text:
-        pct = Label(text=pct_text, font_size=pct_fs,
-                     color=rgba(pct_color),
-                     halign="right", valign="top",
-                     size_hint_y=0.42)
-        pct.bind(size=lambda w, v: setattr(w, "text_size", v))
-        wrap.add_widget(pct)
+    # pct 없어도 빈 Label 로 하단 공간 유지 → amt 위치 일관성 확보
+    pct = Label(text=pct_text, font_size=pct_fs,
+                 color=rgba(pct_color),
+                 halign="right", valign="top",
+                 size_hint_y=0.42)
+    pct.bind(size=lambda w, v: setattr(w, "text_size", v))
+    wrap.add_widget(pct)
     return wrap
 
 
@@ -279,18 +279,15 @@ class TabHoldings(BoxLayout):
                                     lambda *_: show_json_menu(
                                         self.holdings_data, self.refresh)))
 
-        # 장마감 투명도 체크박스 영역
-        fade_box = BoxLayout(orientation="horizontal", size_hint_x=None,
-                              width=sp(110), spacing=sp(2))
-        self.fade_cb = CheckBox(size_hint_x=None, width=sp(28),
-                                  active=app_state.get("fade_sleeping"))
-        self.fade_cb.bind(active=self._on_fade_toggle)
-        fade_box.add_widget(self.fade_cb)
-        fade_box.add_widget(Label(
-            text="장마감\n투명", font_size=sp(10),
-            color=(0.3, 0.3, 0.3, 1), halign="left", valign="middle",
-            text_size=(sp(70), sp(36))))
-        toolbar.add_widget(fade_box)
+        # 장마감 투명도 토글 — ToggleButton 단일 위젯 (탭 영역 전체)
+        from kivy.uix.togglebutton import ToggleButton
+        initial_on = app_state.get("fade_sleeping")
+        self.fade_btn = ToggleButton(
+            text="장마감 투명", font_size=sp(12), bold=True,
+            state="down" if initial_on else "normal",
+            size_hint_x=None, width=sp(100))
+        self.fade_btn.bind(state=self._on_fade_toggle)
+        toolbar.add_widget(self.fade_btn)
         self.add_widget(toolbar)
 
         self.prices = {}
@@ -302,9 +299,10 @@ class TabHoldings(BoxLayout):
     def refresh(self):
         threading.Thread(target=self._fetch_and_render, daemon=True).start()
 
-    def _on_fade_toggle(self, _cb, active):
+    def _on_fade_toggle(self, _btn, state):
         from ui import app_state
-        app_state.set("fade_sleeping", bool(active))
+        active = (state == "down") if isinstance(state, str) else bool(state)
+        app_state.set("fade_sleeping", active)
         self.refresh()
 
     def _fetch_and_render(self):
@@ -404,28 +402,28 @@ class TabHoldings(BoxLayout):
                 color=rgba("#666"), halign=halign, valign="middle",
                 size_hint_x=sx, text_size=(None, sp(18)))
 
-        # Row 2: 매수가 | 손익금액(%) | 외국인(보유%)
+        # Row 2: 매수가 | 손익금액(%) | 외국인(보유%) — 데이터 셀과 동일 우측정렬
         l2 = BoxLayout(orientation="horizontal", size_hint_y=None,
                         height=sp(18), spacing=sp(4))
-        l2.add_widget(_hdr_cell("매수가", COL_A, "center"))
-        l2.add_widget(_hdr_cell("손익금액 (%)", COL_B, "center"))
-        l2.add_widget(_hdr_cell("외국인", COL_C, "center"))
+        l2.add_widget(_hdr_cell("매수가", COL_A, "right"))
+        l2.add_widget(_hdr_cell("손익금액 (%)", COL_B, "right"))
+        l2.add_widget(_hdr_cell("외국인", COL_C, "right"))
         box.add_widget(l2)
 
         # Row 3: 현재가 | 전일대비(%) | 기관
         l3 = BoxLayout(orientation="horizontal", size_hint_y=None,
                         height=sp(18), spacing=sp(4))
-        l3.add_widget(_hdr_cell("현재가", COL_A, "center"))
-        l3.add_widget(_hdr_cell("전일대비 (%)", COL_B, "center"))
-        l3.add_widget(_hdr_cell("기관", COL_C, "center"))
+        l3.add_widget(_hdr_cell("현재가", COL_A, "right"))
+        l3.add_widget(_hdr_cell("전일대비 (%)", COL_B, "right"))
+        l3.add_widget(_hdr_cell("기관", COL_C, "right"))
         box.add_widget(l3)
 
         # Row 4: 목표가(%) | 피크가(%) | 연기금
         l4 = BoxLayout(orientation="horizontal", size_hint_y=None,
                         height=sp(18), spacing=sp(4))
-        l4.add_widget(_hdr_cell("목표가 (%)", COL_A, "center"))
-        l4.add_widget(_hdr_cell("피크가 (%)", COL_B, "center"))
-        l4.add_widget(_hdr_cell("연기금", COL_C, "center"))
+        l4.add_widget(_hdr_cell("목표가 (%)", COL_A, "right"))
+        l4.add_widget(_hdr_cell("피크가 (%)", COL_B, "right"))
+        l4.add_widget(_hdr_cell("연기금", COL_C, "right"))
         box.add_widget(l4)
         return box
 
@@ -466,7 +464,7 @@ class TabHoldings(BoxLayout):
 
         # 컨테이너
         box = BoxLayout(orientation="vertical", size_hint_y=None,
-                         padding=(sp(4), sp(6)), spacing=sp(2))
+                         padding=(sp(4), sp(3)), spacing=sp(0))
         box.bind(minimum_height=box.setter("height"))
 
         from kivy.graphics import Color, Rectangle, Line
@@ -642,33 +640,32 @@ class TabHoldings(BoxLayout):
         box.bind(pos=lambda w, v: setattr(w._bg, "pos", v),
                   size=lambda w, v: setattr(w._bg, "size", v))
 
-        # 행 1: 매수가: 1,935,296      전체손익: +139,645 (+7.22%)
+        # 합계는 단일 Label 로 넣어 2열 분할 ellipsis(...손익, ...대비) 방지.
+        # 색상은 Kivy markup 으로 금액 구간만 지정.
         row_h = sp(28)
-        def _row(left_text, right_text, right_color):
-            row = BoxLayout(orientation="horizontal", size_hint_y=None,
-                             height=row_h, spacing=sp(4))
-            left = Label(
-                text=left_text, bold=True, font_size=FONT_MD,
-                color=rgba("#222"), size_hint_x=0.5,
+
+        def _single(amt_label, amt_value, pct_label, pct_value, pct_color):
+            color_hex = pct_color.lstrip("#")
+            text = (f"{amt_label}: {amt_value:,}    "
+                    f"{pct_label}: [color={color_hex}]"
+                    f"{pct_value}[/color]")
+            lbl = Label(
+                text=text, bold=True, font_size=FONT_MD, markup=True,
+                color=rgba("#222"),
+                size_hint_y=None, height=row_h,
                 halign="left", valign="middle",
                 max_lines=1, shorten=True, shorten_from="right")
-            left.bind(size=lambda w, v: setattr(w, "text_size", v))
-            row.add_widget(left)
-            right = Label(
-                text=right_text, bold=True, font_size=FONT_MD,
-                color=rgba(right_color), size_hint_x=0.5,
-                halign="right", valign="middle",
-                max_lines=1, shorten=True, shorten_from="left")
-            right.bind(size=lambda w, v: setattr(w, "text_size", v))
-            row.add_widget(right)
-            return row
+            lbl.bind(size=lambda w, v: setattr(w, "text_size", v))
+            return lbl
 
-        box.add_widget(_row(
-            f"매수가: {int(invested):,}",
-            f"전체손익: {format_signed(pnl)} ({pnl_pct:+.2f}%)",
+        box.add_widget(_single(
+            "매수가", int(invested),
+            "전체손익",
+            f"{format_signed(pnl)} ({pnl_pct:+.2f}%)",
             sign_color(pnl)))
-        box.add_widget(_row(
-            f"현재가: {int(current):,}",
-            f"전일대비: {format_signed(day_diff)} ({day_pct:+.2f}%)",
+        box.add_widget(_single(
+            "현재가", int(current),
+            "전일대비",
+            f"{format_signed(day_diff)} ({day_pct:+.2f}%)",
             sign_color(day_diff)))
         return box

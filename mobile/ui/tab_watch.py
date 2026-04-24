@@ -130,17 +130,14 @@ class TabWatch(BoxLayout):
                                     lambda *_: show_json_menu(
                                         self.holdings_data, self.refresh)))
 
-        fade_box = BoxLayout(orientation="horizontal", size_hint_x=None,
-                              width=sp(110), spacing=sp(2))
-        self.fade_cb = CheckBox(size_hint_x=None, width=sp(28),
-                                  active=app_state.get("fade_sleeping"))
-        self.fade_cb.bind(active=self._on_fade_toggle)
-        fade_box.add_widget(self.fade_cb)
-        fade_box.add_widget(Label(
-            text="장마감\n투명", font_size=sp(10),
-            color=(0.3, 0.3, 0.3, 1), halign="left", valign="middle",
-            text_size=(sp(70), sp(36))))
-        toolbar.add_widget(fade_box)
+        from kivy.uix.togglebutton import ToggleButton
+        initial_on = app_state.get("fade_sleeping")
+        self.fade_btn = ToggleButton(
+            text="장마감 투명", font_size=sp(12), bold=True,
+            state="down" if initial_on else "normal",
+            size_hint_x=None, width=sp(100))
+        self.fade_btn.bind(state=self._on_fade_toggle)
+        toolbar.add_widget(self.fade_btn)
         self.add_widget(toolbar)
 
         self.container.add_widget(Label(
@@ -150,9 +147,10 @@ class TabWatch(BoxLayout):
     def refresh(self):
         threading.Thread(target=self._fetch_and_render, daemon=True).start()
 
-    def _on_fade_toggle(self, _cb, active):
+    def _on_fade_toggle(self, _btn, state):
         from ui import app_state
-        app_state.set("fade_sleeping", bool(active))
+        active = (state == "down") if isinstance(state, str) else bool(state)
+        app_state.set("fade_sleeping", active)
         self.refresh()
 
     @staticmethod
@@ -231,20 +229,20 @@ class TabWatch(BoxLayout):
                 color=rgba("#666"), halign=halign, valign="middle",
                 size_hint_x=sx))
 
-        # Row 1: 현재가 | 전일대비(%) | 외국인(보유%)
+        # Row 1: 현재가 | 전일대비(%) | 외국인 — 데이터 셀과 동일 우측정렬
         r1 = BoxLayout(orientation="horizontal", size_hint_y=None,
                         height=sp(18), spacing=sp(4))
-        r1.add_widget(_hdr("현재가", COL_A, "center"))
-        r1.add_widget(_hdr("전일대비 (%)", COL_B, "center"))
-        r1.add_widget(_hdr("외국인", COL_C, "center"))
+        r1.add_widget(_hdr("현재가", COL_A, "right"))
+        r1.add_widget(_hdr("전일대비 (%)", COL_B, "right"))
+        r1.add_widget(_hdr("외국인", COL_C, "right"))
         box.add_widget(r1)
 
         # Row 2: 목표가(%) | 피크가(%) | 기관
         r2 = BoxLayout(orientation="horizontal", size_hint_y=None,
                         height=sp(18), spacing=sp(4))
-        r2.add_widget(_hdr("목표가 (%)", COL_A, "center"))
-        r2.add_widget(_hdr("피크가 (%)", COL_B, "center"))
-        r2.add_widget(_hdr("기관", COL_C, "center"))
+        r2.add_widget(_hdr("목표가 (%)", COL_A, "right"))
+        r2.add_widget(_hdr("피크가 (%)", COL_B, "right"))
+        r2.add_widget(_hdr("기관", COL_C, "right"))
         box.add_widget(r2)
         return box
 
@@ -293,7 +291,7 @@ class TabWatch(BoxLayout):
 
         # 컨테이너
         box = BoxLayout(orientation="vertical", size_hint_y=None,
-                         padding=(sp(4), sp(4)), spacing=sp(2))
+                         padding=(sp(4), sp(2)), spacing=sp(0))
         box.bind(minimum_height=box.setter("height"))
 
         from kivy.graphics import Color, Rectangle, Line
