@@ -681,42 +681,56 @@ class TabHoldings(BoxLayout):
         day_diff = current - yesterday
         day_pct = (day_diff / yesterday * 100) if yesterday else 0
 
-        box = BoxLayout(orientation="vertical", size_hint_y=None,
-                         padding=(sp(4), sp(8)), spacing=sp(3))
-        box.bind(minimum_height=box.setter("height"))
-        from kivy.graphics import Color, Rectangle
-        with box.canvas.before:
-            Color(*rgba("#f5f6f8"))
-            box._bg = Rectangle(pos=box.pos, size=box.size)
-        box.bind(pos=lambda w, v: setattr(w._bg, "pos", v),
-                  size=lambda w, v: setattr(w._bg, "size", v))
+        # 외곽 wrap (스크롤 밖이라 약간의 padding 유지)
+        outer = BoxLayout(orientation="vertical", size_hint_y=None,
+                           padding=(sp(8), sp(6)), spacing=0)
+        outer.bind(minimum_height=outer.setter("height"))
 
-        # 합계는 단일 Label 로 넣어 2열 분할 ellipsis(...손익, ...대비) 방지.
-        # 색상은 Kivy markup 으로 금액 구간만 지정.
-        row_h = sp(28)
+        # 카드보드 박스 — 흰 배경 + 회색 테두리 둥근 모서리
+        card = BoxLayout(orientation="vertical", size_hint_y=None,
+                          padding=(sp(12), sp(8)), spacing=sp(4))
+        card.bind(minimum_height=card.setter("height"))
+        from kivy.graphics import Color, Line, RoundedRectangle
+        with card.canvas.before:
+            Color(*rgba("#ffffff"))
+            card._bg = RoundedRectangle(pos=card.pos, size=card.size,
+                                          radius=[sp(8)])
+            Color(*rgba("#dcdcdc"))
+            card._border = Line(rounded_rectangle=(0, 0, 1, 1, sp(8)),
+                                 width=1)
+        def _card_resize(w, _v):
+            w._bg.pos = w.pos
+            w._bg.size = w.size
+            w._border.rounded_rectangle = (w.x, w.y, w.width, w.height, sp(8))
+        card.bind(pos=_card_resize, size=_card_resize)
 
-        def _single(amt_label, amt_value, pct_label, pct_value, pct_color):
-            color_hex = pct_color.lstrip("#")
-            text = (f"{amt_label}: {amt_value:,}    "
-                    f"{pct_label}: [color={color_hex}]"
-                    f"{pct_value}[/color]")
+        body_hex = "222222"
+        pnl_color_hex = sign_color(pnl).lstrip("#")
+        day_color_hex = sign_color(day_diff).lstrip("#")
+        med_px = int(sp(15))   # 금액 강조
+
+        # 행 1: 매수가 X,XXX,XXX    현재가 X,XXX,XXX (검정 + bold 금액)
+        row1_text = (f"[color={body_hex}]매수가 [b]{int(invested):,}[/b][/color]"
+                      f"    "
+                      f"[color={body_hex}]현재가 [b]{int(current):,}[/b][/color]")
+        # 행 2: 전체 +PNL (X.XX%)   오늘 +DAY (X.XX%) (라벨 검정, 금액·% 색)
+        row2_text = (f"[color={body_hex}]전체[/color] "
+                      f"[color={pnl_color_hex}][size={med_px}][b]{format_signed(pnl)}[/b][/size] "
+                      f"({pnl_pct:+.2f}%)[/color]"
+                      f"  "
+                      f"[color={body_hex}]오늘[/color] "
+                      f"[color={day_color_hex}][size={med_px}][b]{format_signed(day_diff)}[/b][/size] "
+                      f"({day_pct:+.2f}%)[/color]")
+
+        for txt, h in ((row1_text, sp(22)), (row2_text, sp(24))):
             lbl = Label(
-                text=text, bold=True, font_size=FONT_MD, markup=True,
+                text=txt, markup=True, font_size=FONT_SMALL,
                 color=rgba("#222"),
-                size_hint_y=None, height=row_h,
+                size_hint_y=None, height=h,
                 halign="left", valign="middle",
                 max_lines=1, shorten=True, shorten_from="right")
             lbl.bind(size=lambda w, v: setattr(w, "text_size", v))
-            return lbl
+            card.add_widget(lbl)
 
-        box.add_widget(_single(
-            "매수가", int(invested),
-            "전체",
-            f"{format_signed(pnl)} ({pnl_pct:+.2f}%)",
-            sign_color(pnl)))
-        box.add_widget(_single(
-            "현재가", int(current),
-            "오늘",
-            f"{format_signed(day_diff)} ({day_pct:+.2f}%)",
-            sign_color(day_diff)))
-        return box
+        outer.add_widget(card)
+        return outer
