@@ -555,22 +555,22 @@ class TabHoldings(BoxLayout):
         left_col = BoxLayout(orientation="vertical", size_hint_x=0.62,
                               spacing=sp(2))
 
-        # Line 1: [zZ] 종목명 (보유수)  섹터설명  [뱃지]
+        # Line 1: [zZ] 종목명 (보유수)  [뱃지]  섹터설명
         name_line = BoxLayout(orientation="horizontal", size_hint_y=None,
                                height=sp(22), spacing=sp(4))
         name_color_hex = _c(sign_color(pnl_pct)).lstrip("#")
-        name_markup = (f"[color={name_color_hex}]"
-                        f"[b]{prefix}{name} ({shares}주)[/b]"
-                        f"[/color]"
-                        + (f"  [color={gray_hex}][size={small_px}]{sector}[/size][/color]"
-                           if sector else ""))
+        # 이름은 auto-width — texture_size 로 실제 텍스트 폭만 차지
+        name_only_markup = (f"[color={name_color_hex}]"
+                             f"[b]{prefix}{name} ({shares}주)[/b]"
+                             f"[/color]")
         name_lbl = Label(
-            text=name_markup, markup=True, font_size=FONT_MD,
+            text=name_only_markup, markup=True, font_size=FONT_MD,
             color=rgba(_c("#222")),
-            halign="left", valign="middle",
-            max_lines=1, shorten=True, shorten_from="right")
-        name_lbl.bind(size=lambda w, v: setattr(w, "text_size", v))
+            size_hint=(None, 1),
+            halign="left", valign="middle")
+        name_lbl.bind(texture_size=lambda w, v: setattr(w, "width", v[0]))
         name_line.add_widget(name_lbl)
+
         if badge_text:
             from kivy.graphics import Color, RoundedRectangle
             badge_w = sp(28)
@@ -587,6 +587,18 @@ class TabHoldings(BoxLayout):
             badge.bind(pos=lambda w, v: setattr(w._bg, "pos", v),
                         size=lambda w, v: setattr(w._bg, "size", v))
             name_line.add_widget(badge)
+
+        # 섹터는 라벨 옆에 회색 작게
+        if sector:
+            sector_lbl = Label(
+                text=sector, font_size=sp(11),
+                color=rgba(_c("#999")),
+                halign="left", valign="middle",
+                max_lines=1, shorten=True, shorten_from="right")
+            sector_lbl.bind(size=lambda w, v: setattr(w, "text_size", v))
+            name_line.add_widget(sector_lbl)
+        else:
+            name_line.add_widget(BoxLayout())  # 우측 스페이서
         left_col.add_widget(name_line)
 
         # Line 2: 현재가원 (거래량)

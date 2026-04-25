@@ -319,19 +319,17 @@ class TabWatch(BoxLayout):
         left_col = BoxLayout(orientation="vertical", size_hint_x=0.62,
                               spacing=sp(2))
 
-        # Line 1: [zZ] 종목명  섹터  [뱃지]
+        # Line 1: [zZ] 종목명  [뱃지]  섹터
         name_line = BoxLayout(orientation="horizontal", size_hint_y=None,
                                height=sp(22), spacing=sp(4))
         name_color_hex = _c(diff_color).lstrip("#")
-        name_markup = (f"[color={name_color_hex}][b]{prefix}{name}[/b][/color]"
-                        + (f"  [color={gray_hex}][size={small_px}]{sector}[/size][/color]"
-                           if sector else ""))
+        name_only_markup = f"[color={name_color_hex}][b]{prefix}{name}[/b][/color]"
         name_lbl = Label(
-            text=name_markup, markup=True, font_size=FONT_MD,
+            text=name_only_markup, markup=True, font_size=FONT_MD,
             color=rgba(_c("#222")),
-            halign="left", valign="middle",
-            max_lines=1, shorten=True, shorten_from="right")
-        name_lbl.bind(size=lambda w, v: setattr(w, "text_size", v))
+            size_hint=(None, 1),
+            halign="left", valign="middle")
+        name_lbl.bind(texture_size=lambda w, v: setattr(w, "width", v[0]))
         name_line.add_widget(name_lbl)
         if badge_text:
             from kivy.graphics import Color as _Col, RoundedRectangle
@@ -349,6 +347,16 @@ class TabWatch(BoxLayout):
             badge.bind(pos=lambda w, v: setattr(w._bg, "pos", v),
                         size=lambda w, v: setattr(w._bg, "size", v))
             name_line.add_widget(badge)
+        if sector:
+            sector_lbl = Label(
+                text=sector, font_size=sp(11),
+                color=rgba(_c("#999")),
+                halign="left", valign="middle",
+                max_lines=1, shorten=True, shorten_from="right")
+            sector_lbl.bind(size=lambda w, v: setattr(w, "text_size", v))
+            name_line.add_widget(sector_lbl)
+        else:
+            name_line.add_widget(BoxLayout())
         left_col.add_widget(name_line)
 
         # Line 2: 현재가원 (거래량)
