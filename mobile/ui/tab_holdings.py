@@ -553,7 +553,8 @@ class TabHoldings(BoxLayout):
 
         # ─── 좌측: 5줄
         left_col = BoxLayout(orientation="vertical", size_hint_x=0.62,
-                              spacing=sp(2))
+                              size_hint_y=None, spacing=sp(2))
+        left_col.bind(minimum_height=left_col.setter("height"))
 
         # Line 1: [zZ] 종목명 (보유수)  [뱃지]  섹터설명
         name_line = BoxLayout(orientation="horizontal", size_hint_y=None,
@@ -646,7 +647,8 @@ class TabHoldings(BoxLayout):
 
         # ─── 우측: 4줄 (수급)
         right_col = BoxLayout(orientation="vertical", size_hint_x=0.38,
-                               spacing=sp(2))
+                               size_hint_y=None, spacing=sp(2))
+        right_col.bind(minimum_height=right_col.setter("height"))
 
         # 외국인 보유 x.xx%
         if foreign_ratio and foreign_ratio > 0:
