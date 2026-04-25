@@ -575,9 +575,10 @@ class TabHoldings(BoxLayout):
         left_col.bind(minimum_height=left_col.setter("height"))
 
         # Line 1: [zZ] 종목명 (보유수)  [뱃지]  섹터설명
+        # 종목명 색은 현재가(오늘 변동) 부호 기준 — 데일리 흐름과 일치
         name_line = BoxLayout(orientation="horizontal", size_hint_y=None,
                                height=sp(22), spacing=sp(4))
-        name_color_hex = _c(sign_color(pnl_pct)).lstrip("#")
+        name_color_hex = _c(sign_color(day_diff) if day_diff else "#222").lstrip("#")
         # 이름은 auto-width — texture_size 로 실제 텍스트 폭만 차지
         name_only_markup = (f"[color={name_color_hex}]"
                              f"[b]{prefix}{name} ({shares}주)[/b]"
