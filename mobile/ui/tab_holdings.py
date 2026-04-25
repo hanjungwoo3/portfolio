@@ -409,14 +409,14 @@ class TabHoldings(BoxLayout):
             total_current += round(net_price * shares)
             total_yesterday += round(base_price * FEE_MULTIPLIER * shares)
 
-        # 전체 손익 부호로 카드 배경색 결정 (연한 톤)
+        # 전체 손익 부호로 카드(l1) 색 결정 — 한국식: 수익=빨강, 손실=파랑
         total_pnl = total_current - total_invested
         if total_pnl > 0:
-            card_bg = "#fff5f5"   # 연한 빨강 (수익)
+            card_bg = "#f8dcdc"   # 연한 빨강 (수익)
         elif total_pnl < 0:
-            card_bg = "#f3f6ff"   # 연한 파랑 (손실)
+            card_bg = "#dce6f2"   # 연한 파랑 (손실, 기존 기본색)
         else:
-            card_bg = "#ffffff"
+            card_bg = "#dce6f2"
 
         # 2차 패스: 카드 렌더 (공통 배경색 적용)
         for stock in holdings:
@@ -493,9 +493,8 @@ class TabHoldings(BoxLayout):
         box.bind(minimum_height=box.setter("height"))
 
         from kivy.graphics import Color, Rectangle, Line
-        bg_hex = _fade_hex(card_bg, 0.7) if (is_sleeping and fade_on) else card_bg
         with box.canvas.before:
-            Color(*rgba(bg_hex))
+            Color(*rgba("#ffffff"))
             box._bg = Rectangle(pos=box.pos, size=box.size)
             Color(*rgba("#eeeeee"))
             box._line = Line(points=[0, 0, 1, 0], width=1)
@@ -544,7 +543,8 @@ class TabHoldings(BoxLayout):
                         padding=(sp(10), sp(8)), spacing=sp(8))
         l1.bind(minimum_height=l1.setter("height"))
         l1_wrap.add_widget(l1)
-        name_bg = _c("#dce6f2") if not is_sleeping else _c("#ececec")
+        # 카드 색은 _render 가 전체 손익 부호로 정한 card_bg 사용 (수익=연빨강 / 손실=연파랑)
+        name_bg = _c(card_bg) if not is_sleeping else _c("#ececec")
         from kivy.graphics import Color as _Col, RoundedRectangle as _RR
         with l1.canvas.before:
             _Col(*rgba(name_bg))
