@@ -142,12 +142,25 @@ class PortfolioApp(App):
         header.add_widget(self.title_lbl)
 
         self.btn_next = Button(
-            text=">", size_hint_x=None, width=sp(48),
+            text=">", size_hint_x=None, width=sp(40),
             font_size=sp(22), bold=True,
             background_color=(0, 0, 0, 0),
             color=(1, 1, 1, 1))
         self.btn_next.bind(on_release=lambda *_: self._go_next())
         header.add_widget(self.btn_next)
+
+        # 자동 새로고침 간격 — 헤더 우측 사이클 버튼 (안함 → 5초 → 1분)
+        from ui import app_state
+        self._refresh_event = None
+        self._refresh_options = [0, 5, 60]  # 초 단위, 0=안함
+        self.refresh_btn = Button(
+            text=self._refresh_label(app_state.get("refresh_interval") or 0),
+            size_hint_x=None, width=sp(56),
+            font_size=sp(11), bold=True,
+            background_color=(0, 0, 0, 0),
+            color=(0.85, 0.95, 1, 1))
+        self.refresh_btn.bind(on_release=lambda *_: self._cycle_refresh())
+        header.add_widget(self.refresh_btn)
 
         root.add_widget(header)
 
@@ -174,9 +187,41 @@ class PortfolioApp(App):
         self.carousel.bind(index=self._on_index_change)
         root.add_widget(self.carousel)
 
-        # 초기 데이터 로드
+        # 초기 데이터 로드 + 저장된 자동 새로고침 간격 적용
         Clock.schedule_once(lambda dt: self._refresh_current(), 0.2)
+        self._apply_refresh_interval(app_state.get("refresh_interval") or 0)
         return root
+
+    @staticmethod
+    def _refresh_label(sec: int) -> str:
+        if sec <= 0:
+            return "수동"
+        if sec < 60:
+            return f"{sec}초"
+        return f"{sec // 60}분"
+
+    def _cycle_refresh(self):
+        from ui import app_state
+        cur = app_state.get("refresh_interval") or 0
+        try:
+            idx = self._refresh_options.index(cur)
+        except ValueError:
+            idx = 0
+        nxt = self._refresh_options[(idx + 1) % len(self._refresh_options)]
+        app_state.set("refresh_interval", nxt)
+        self.refresh_btn.text = self._refresh_label(nxt)
+        self._apply_refresh_interval(nxt)
+
+    def _apply_refresh_interval(self, sec: int):
+        if self._refresh_event is not None:
+            try:
+                self._refresh_event.cancel()
+            except Exception:
+                pass
+            self._refresh_event = None
+        if sec > 0:
+            self._refresh_event = Clock.schedule_interval(
+                lambda dt: self._refresh_current(), sec)
 
     # ─── 탭 전환 ─────────────────────────────────────
     def _on_index_change(self, _car, idx):

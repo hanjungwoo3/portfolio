@@ -6,6 +6,7 @@ STATE_PATH = Path(__file__).resolve().parent.parent / ".app_state.json"
 
 _DEFAULTS = {
     "fade_sleeping": True,  # 장마감 휴면 종목 투명도 적용 on/off
+    "refresh_interval": 0,  # 자동 새로고침 간격(초). 0=안함, 5, 60
 }
 
 _state = dict(_DEFAULTS)
