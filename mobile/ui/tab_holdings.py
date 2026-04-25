@@ -310,6 +310,30 @@ class TabHoldings(BoxLayout):
 
         holdings = sorted(holdings, key=_sort_key)
 
+        # 1차 패스: 합계 계산 (카드 배경색을 전체 손익 기준으로 정하기 위함)
+        for stock in holdings:
+            t = stock["ticker"]
+            shares = stock.get("shares", 0)
+            avg = stock.get("avg_price", 0)
+            price_info = prices.get(t, {})
+            cur_price = price_info.get("price", 0) or avg
+            base_price = price_info.get("base", 0) or cur_price
+            net_price = cur_price * FEE_MULTIPLIER
+
+            total_invested += shares * avg
+            total_current += round(net_price * shares)
+            total_yesterday += round(base_price * FEE_MULTIPLIER * shares)
+
+        # 전체 손익 부호로 카드 배경색 결정 (연한 톤)
+        total_pnl = total_current - total_invested
+        if total_pnl > 0:
+            card_bg = "#fff5f5"   # 연한 빨강 (수익)
+        elif total_pnl < 0:
+            card_bg = "#f3f6ff"   # 연한 파랑 (손실)
+        else:
+            card_bg = "#ffffff"
+
+        # 2차 패스: 카드 렌더 (공통 배경색 적용)
         for stock in holdings:
             t = stock["ticker"]
             shares = stock.get("shares", 0)
@@ -321,11 +345,6 @@ class TabHoldings(BoxLayout):
             volume = price_info.get("volume", 0)
             net_price = cur_price * FEE_MULTIPLIER
             current_val = round(net_price * shares)
-            yesterday_val = round(base_price * FEE_MULTIPLIER * shares)
-
-            total_invested += invested
-            total_current += current_val
-            total_yesterday += yesterday_val
 
             sleeping = _is_sleeping(t, volume)
             peak = max(peaks.get(t, cur_price), cur_price)
@@ -333,7 +352,8 @@ class TabHoldings(BoxLayout):
                 self._build_holding_row(stock, cur_price, base_price, volume,
                                          invested, current_val,
                                          peak=peak, thresholds=thresholds,
-                                         sleeping=sleeping))
+                                         sleeping=sleeping,
+                                         card_bg=card_bg))
 
         # 합계 는 스크롤 밖 고정 컨테이너에 둠 (버튼 위에 항상 표시)
         self.total_container.clear_widgets()
@@ -385,7 +405,8 @@ class TabHoldings(BoxLayout):
 
     def _build_holding_row(self, stock, cur_price, base_price, volume,
                             invested, current_val,
-                            peak=None, thresholds=None, sleeping=False):
+                            peak=None, thresholds=None, sleeping=False,
+                            card_bg="#ffffff"):
         ticker = stock["ticker"]
         name = stock.get("name", ticker)
         avg = stock.get("avg_price", 0)
@@ -424,8 +445,9 @@ class TabHoldings(BoxLayout):
         box.bind(minimum_height=box.setter("height"))
 
         from kivy.graphics import Color, Rectangle, Line
+        bg_hex = _fade_hex(card_bg, 0.7) if (is_sleeping and fade_on) else card_bg
         with box.canvas.before:
-            Color(*rgba("#ffffff"))
+            Color(*rgba(bg_hex))
             box._bg = Rectangle(pos=box.pos, size=box.size)
             Color(*rgba("#eeeeee"))
             box._line = Line(points=[0, 0, 1, 0], width=1)
