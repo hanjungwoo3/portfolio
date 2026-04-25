@@ -401,10 +401,10 @@ class TabWatch(BoxLayout):
                                size_hint_y=None, spacing=sp(2))
         right_col.bind(minimum_height=right_col.setter("height"))
 
+        # 외국인 보유 x.xx% — 숫자는 검정
         if foreign_ratio and foreign_ratio > 0:
-            ratio_hex = _c(sign_color(1)).lstrip("#")
             ratio_markup = (f"[color={body_hex}]외국인 보유[/color] "
-                             f"[color={ratio_hex}][b]{foreign_ratio:.2f}%[/b][/color]")
+                             f"[color={body_hex}][b]{foreign_ratio:.2f}%[/b][/color]")
         else:
             ratio_markup = f"[color={gray_hex}]외국인 보유[/color]"
         right_col.add_widget(_line(ratio_markup))

@@ -640,14 +640,14 @@ class TabHoldings(BoxLayout):
             day_markup = f"[color={gray_hex}]어제보다[/color]"
         left_col.add_widget(_line(day_markup))
 
-        # Line 4: 전체 +pnl (pct%)
+        # Line 4: 전체수익 +pnl (pct%)
         if pnl != 0:
             pnl_color_hex = _c(sign_color(pnl)).lstrip("#")
-            pnl_markup = (f"[color={body_hex}]전체[/color] "
+            pnl_markup = (f"[color={body_hex}]전체수익[/color] "
                           f"[color={pnl_color_hex}][b]{format_signed(pnl)}[/b] "
                           f"({pnl_pct:+.2f}%)[/color]")
         else:
-            pnl_markup = f"[color={gray_hex}]전체[/color]"
+            pnl_markup = f"[color={gray_hex}]전체수익[/color]"
         left_col.add_widget(_line(pnl_markup))
 
         # Line 5: 목표 (score) target (+gap%) — 없으면 그냥 "목표" 회색
@@ -668,11 +668,10 @@ class TabHoldings(BoxLayout):
                                size_hint_y=None, spacing=sp(2))
         right_col.bind(minimum_height=right_col.setter("height"))
 
-        # 외국인 보유 x.xx%
+        # 외국인 보유 x.xx% — 숫자는 검정 (자산 비율은 +/- 의미 없음)
         if foreign_ratio and foreign_ratio > 0:
-            ratio_hex = _c(sign_color(1)).lstrip("#")  # 항상 양수처럼 표시 (보유는 +)
             ratio_markup = (f"[color={body_hex}]외국인 보유[/color] "
-                             f"[color={ratio_hex}][b]{foreign_ratio:.2f}%[/b][/color]")
+                             f"[color={body_hex}][b]{foreign_ratio:.2f}%[/b][/color]")
         else:
             ratio_markup = f"[color={gray_hex}]외국인 보유[/color]"
         right_col.add_widget(_line(ratio_markup))
@@ -727,20 +726,20 @@ class TabHoldings(BoxLayout):
         day_color_hex = sign_color(day_diff).lstrip("#")
         med_px = int(sp(15))   # 금액 강조
 
-        # 행 1: 매수가 X,XXX,XXX    현재가 X,XXX,XXX (검정 + bold 금액)
+        # 행 1: 매수가 X,XXX,XXX    어제보다 +X,XXX (X.XX%)
         row1_text = (f"[color={body_hex}]매수가 [b]{int(invested):,}[/b][/color]"
                       f"    "
-                      f"[color={body_hex}]현재가 [b]{int(current):,}[/b][/color]")
-        # 행 2: 전체 +PNL (X.XX%)   오늘 +DAY (X.XX%) (라벨 검정, 금액·% 색)
-        row2_text = (f"[color={body_hex}]전체[/color] "
-                      f"[color={pnl_color_hex}][size={med_px}][b]{format_signed(pnl)}[/b][/size] "
-                      f"({pnl_pct:+.2f}%)[/color]"
-                      f"  "
-                      f"[color={body_hex}]오늘[/color] "
+                      f"[color={body_hex}]어제보다[/color] "
                       f"[color={day_color_hex}][size={med_px}][b]{format_signed(day_diff)}[/b][/size] "
                       f"({day_pct:+.2f}%)[/color]")
+        # 행 2: 현재가 X,XXX,XXX    전체수익 +XXX,XXX (X.XX%)
+        row2_text = (f"[color={body_hex}]현재가 [b]{int(current):,}[/b][/color]"
+                      f"    "
+                      f"[color={body_hex}]전체수익[/color] "
+                      f"[color={pnl_color_hex}][size={med_px}][b]{format_signed(pnl)}[/b][/size] "
+                      f"({pnl_pct:+.2f}%)[/color]")
 
-        for txt, h in ((row1_text, sp(22)), (row2_text, sp(24))):
+        for txt, h in ((row1_text, sp(24)), (row2_text, sp(24))):
             lbl = Label(
                 text=txt, markup=True, font_size=FONT_SMALL,
                 color=rgba("#222"),
