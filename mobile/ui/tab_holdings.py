@@ -409,16 +409,7 @@ class TabHoldings(BoxLayout):
             total_current += round(net_price * shares)
             total_yesterday += round(base_price * FEE_MULTIPLIER * shares)
 
-        # 전체 손익 부호로 카드(l1) 색 결정 — 한국식: 수익=빨강, 손실=파랑
-        total_pnl = total_current - total_invested
-        if total_pnl > 0:
-            card_bg = "#f8dcdc"   # 연한 빨강 (수익)
-        elif total_pnl < 0:
-            card_bg = "#dce6f2"   # 연한 파랑 (손실, 기존 기본색)
-        else:
-            card_bg = "#dce6f2"
-
-        # 2차 패스: 카드 렌더 (공통 배경색 적용)
+        # 2차 패스: 카드 렌더 (각 카드 색은 _build_holding_row 내부에서 종목별 손익으로 결정)
         for stock in holdings:
             t = stock["ticker"]
             shares = stock.get("shares", 0)
@@ -437,8 +428,7 @@ class TabHoldings(BoxLayout):
                 self._build_holding_row(stock, cur_price, base_price, volume,
                                          invested, current_val,
                                          peak=peak, thresholds=thresholds,
-                                         sleeping=sleeping,
-                                         card_bg=card_bg))
+                                         sleeping=sleeping))
 
         # 합계 는 스크롤 밖 고정 컨테이너에 둠 (버튼 위에 항상 표시)
         self.total_container.clear_widgets()
@@ -453,8 +443,7 @@ class TabHoldings(BoxLayout):
 
     def _build_holding_row(self, stock, cur_price, base_price, volume,
                             invested, current_val,
-                            peak=None, thresholds=None, sleeping=False,
-                            card_bg="#ffffff"):
+                            peak=None, thresholds=None, sleeping=False):
         ticker = stock["ticker"]
         name = stock.get("name", ticker)
         avg = stock.get("avg_price", 0)
@@ -543,8 +532,15 @@ class TabHoldings(BoxLayout):
                         padding=(sp(10), sp(8)), spacing=sp(8))
         l1.bind(minimum_height=l1.setter("height"))
         l1_wrap.add_widget(l1)
-        # 카드 색은 _render 가 전체 손익 부호로 정한 card_bg 사용 (수익=연빨강 / 손실=연파랑)
-        name_bg = _c(card_bg) if not is_sleeping else _c("#ececec")
+        # 카드 색 — 종목별 손익 부호: 수익(+) 연빨강, 손실(-) 연파랑, 0 흰색
+        # 휴면+fade_on 인 경우엔 _c() 가 70% 흰색 페이드 적용 → 색상 유지하면서 흐려짐
+        if pnl > 0:
+            card_bg = "#f8dcdc"   # 연한 빨강
+        elif pnl < 0:
+            card_bg = "#dce6f2"   # 연한 파랑
+        else:
+            card_bg = "#ffffff"
+        name_bg = _c(card_bg)
         from kivy.graphics import Color as _Col, RoundedRectangle as _RR
         with l1.canvas.before:
             _Col(*rgba(name_bg))
