@@ -176,7 +176,7 @@ class TabUS(BoxLayout):
         for i in range(0, len(indices), 2):
             pair = indices[i:i + 2]
             row = BoxLayout(orientation="horizontal", size_hint_y=None,
-                             height=sp(64), spacing=sp(6))
+                             height=sp(76), spacing=sp(6))
             for idx in pair:
                 row.add_widget(self._tier0_card(idx))
             if len(pair) == 1:
@@ -223,21 +223,23 @@ class TabUS(BoxLayout):
         return self._us_market_closed()
 
     def _tier0_card(self, idx):
-        """2줄 카드: Line 1 [zZ 이름 가격 등락%] + Line 2 [설명] — 둥근 배경."""
+        """3줄 카드:
+          Line 1: [zZ] 이름
+          Line 2: 설명 (note) — 회색 작게
+          Line 3: 가격 (등락%)
+        둥근 배경. 좁은 너비에서 텍스트 잘림 방지."""
         pct = idx.get("pct", 0)
         pct_color = "#ff6b6b" if pct > 0 else "#5dade2" if pct < 0 else "#bbb"
         note = idx.get("note", "")
 
-        # zZ 마커 — 심볼별 시장 상태 (USD/KRW 는 24h FX 라 제외)
         symbol = idx.get("symbol", "")
         show_zzz = (symbol != "KRW=X"
                      and self._is_symbol_sleeping(symbol))
 
         card = BoxLayout(orientation="vertical", size_hint_y=None,
-                          height=sp(64), padding=(sp(10), sp(6)),
+                          height=sp(76), padding=(sp(10), sp(6)),
                           spacing=sp(1))
 
-        # 카드 배경 (약간 밝은 블루그레이 + 둥근 모서리)
         from kivy.graphics import Color, RoundedRectangle
         with card.canvas.before:
             Color(*rgba("#3c5470"))
@@ -246,9 +248,9 @@ class TabUS(BoxLayout):
         card.bind(pos=lambda w, v: setattr(w._bg, "pos", v),
                    size=lambda w, v: setattr(w._bg, "size", v))
 
-        # Line 1: [zZ] 이름 / 가격 / 등락%
+        # Line 1: [zZ] 종목명
         line1 = BoxLayout(orientation="horizontal", size_hint_y=None,
-                           height=sp(28), spacing=sp(4))
+                           height=sp(22), spacing=sp(4))
         if show_zzz:
             zzz_lbl = Label(
                 text="zZ", bold=True, color=rgba("#7aa3d4"),
@@ -259,31 +261,32 @@ class TabUS(BoxLayout):
         name_lbl = Label(
             text=idx['name'], bold=True, color=rgba("#fff"),
             font_size=FONT_MD, halign="left", valign="middle",
-            size_hint_x=None)
-        name_lbl.bind(texture_size=lambda w, v: setattr(w, "width", v[0]))
+            max_lines=1, shorten=True, shorten_from="right")
+        name_lbl.bind(size=lambda w, v: setattr(w, "text_size", v))
         line1.add_widget(name_lbl)
-        price_lbl = Label(
-            text=f"{idx['price']:,.2f}", color=rgba("#ecf0f1"),
-            font_size=FONT_SMALL, halign="left", valign="middle",
-            max_lines=1, shorten=True, shorten_from="left")
-        price_lbl.bind(size=lambda w, v: setattr(w, "text_size", v))
-        line1.add_widget(price_lbl)
-        pct_lbl = Label(
-            text=f"{pct:+.2f}%", bold=True, color=rgba(pct_color),
-            font_size=FONT_MD, halign="right", valign="middle",
-            size_hint_x=None)
-        pct_lbl.bind(texture_size=lambda w, v: setattr(w, "width", v[0]))
-        line1.add_widget(pct_lbl)
         card.add_widget(line1)
 
-        # Line 2: 설명 (note) — 데스크톱과 동일 문구
+        # Line 2: 설명 (note)
         note_lbl = Label(
             text=note, color=rgba("#b0bec5"),
             font_size=FONT_XS, halign="left", valign="middle",
-            size_hint_y=None, height=sp(20),
+            size_hint_y=None, height=sp(18),
             max_lines=1, shorten=True, shorten_from="right")
         note_lbl.bind(size=lambda w, v: setattr(w, "text_size", v))
         card.add_widget(note_lbl)
+
+        # Line 3: 가격 (등락%) — 한 줄에 합치고 잘림 없음 (좁아도 폰트 줄어들 여지)
+        price_text = f"{idx['price']:,.2f} ({pct:+.2f}%)"
+        price_color_hex = pct_color
+        price_lbl = Label(
+            text=f"[color=ecf0f1]{idx['price']:,.2f}[/color] "
+                  f"[color={price_color_hex.lstrip('#')}][b]({pct:+.2f}%)[/b][/color]",
+            markup=True, font_size=FONT_MD,
+            halign="left", valign="middle",
+            size_hint_y=None, height=sp(24),
+            max_lines=1, shorten=True, shorten_from="right")
+        price_lbl.bind(size=lambda w, v: setattr(w, "text_size", v))
+        card.add_widget(price_lbl)
 
         return card
 
