@@ -6,7 +6,12 @@ on:
     paths:
       - 'mobile/**'
       - '.github/workflows/android-build.yml'
+    tags:
+      - 'v*'
   workflow_dispatch:
+
+permissions:
+  contents: write   # Release 생성에 필요
 
 jobs:
   build:
@@ -97,3 +102,13 @@ jobs:
           path: mobile/bin/*.apk
           if-no-files-found: error
           retention-days: 30
+
+      # 태그(v*) 푸시일 때만 GitHub Release 생성 + APK 첨부
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: mobile/bin/*.apk
+          generate_release_notes: true
+          draft: false
+          prerelease: false
