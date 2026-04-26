@@ -26,7 +26,8 @@ def _hide_dock_icon():
         NSApplication.sharedApplication().setActivationPolicy_(1)
     except Exception:
         pass
-WINDOW_SCRIPT = SCRIPT_DIR / "portfolio_window.py"
+WINDOW_SCRIPT_V1 = SCRIPT_DIR / "portfolio_window.py"
+WINDOW_SCRIPT_V2 = SCRIPT_DIR / "portfolio_window_v2.py"
 VENV_PYTHON = SCRIPT_DIR / "venv" / "bin" / "python3"
 # venv가 없으면 시스템 python3 사용
 if not VENV_PYTHON.exists():
@@ -36,58 +37,91 @@ if not VENV_PYTHON.exists():
 class LauncherApp(rumps.App):
     def __init__(self):
         super().__init__("📈", quit_button=None)
-        self.window_proc = None
+        # v1, v2 각각 독립 추적 — 동시 실행 가능
+        self.procs = {"v1": None, "v2": None}
 
         self.menu = [
-            rumps.MenuItem("📊 포트폴리오 창 열기", callback=self.open_window),
-            rumps.MenuItem("🛑 창 닫기", callback=self.close_window),
+            rumps.MenuItem("📊 포트폴리오 창 열기 (신규 카드 UI)",
+                            callback=self.open_window_v2),
+            rumps.MenuItem("🗂 포트폴리오 창 열기 (기존 테이블 UI)",
+                            callback=self.open_window_v1),
+            None,
+            rumps.MenuItem("🛑 신규 UI 닫기", callback=self.close_v2),
+            rumps.MenuItem("🛑 기존 UI 닫기", callback=self.close_v1),
             None,
             rumps.MenuItem("종료", callback=rumps.quit_application),
         ]
 
-    def _is_running(self) -> bool:
-        return self.window_proc is not None and self.window_proc.poll() is None
+    def _is_running(self, key: str) -> bool:
+        p = self.procs.get(key)
+        return p is not None and p.poll() is None
 
-    def open_window(self, _sender):
-        if self._is_running():
+    def _spawn(self, key: str, script_path: Path, label: str):
+        # 이미 실행 중이면 창을 앞으로 가져오기 (Mission Control / 데스크탑 뒤로 숨었을 경우 대응)
+        if self._is_running(key):
+            self._bring_to_front()
             rumps.notification(
-                title="포트폴리오 모니터",
-                subtitle="",
-                message="이미 실행 중입니다",
+                title="포트폴리오 모니터", subtitle=label,
+                message="이미 실행 중 — 앞으로 가져옵니다",
             )
             return
         try:
             cmd = [str(VENV_PYTHON)]
             if VENV_PYTHON.name == "env":
                 cmd.append("python3")
-            cmd.append(str(WINDOW_SCRIPT))
-            self.window_proc = subprocess.Popen(
-                cmd, cwd=str(SCRIPT_DIR),
-            )
-            self.title = "📈"  # 메뉴바 아이콘 유지
+            cmd.append(str(script_path))
+            self.procs[key] = subprocess.Popen(cmd, cwd=str(SCRIPT_DIR))
+            self.title = "📈"
         except Exception as e:
-            rumps.alert(title="실행 실패", message=str(e))
+            rumps.alert(title=f"실행 실패 ({label})", message=str(e))
 
-    def close_window(self, _sender):
-        if self._is_running():
-            # 1) SIGTERM 전송 → window 가 _on_quit 으로 자진 종료
-            self.window_proc.terminate()
+    def _bring_to_front(self):
+        """포트폴리오 창들을 모두 앞으로 가져오기 (다른 데스크탑/뒤에 숨었을 때)."""
+        script = '''
+tell application "System Events"
+    set procs to (every process whose name contains "Python")
+    repeat with p in procs
+        try
+            set frontmost of p to true
+        end try
+    end repeat
+end tell
+'''
+        try:
+            subprocess.Popen(["osascript", "-e", script])
+        except Exception:
+            pass
+
+    def open_window_v2(self, _sender):
+        self._spawn("v2", WINDOW_SCRIPT_V2, "신규 카드 UI")
+
+    def open_window_v1(self, _sender):
+        self._spawn("v1", WINDOW_SCRIPT_V1, "기존 테이블 UI")
+
+    def _close(self, key: str, label: str):
+        if self._is_running(key):
+            p = self.procs[key]
+            p.terminate()
             try:
-                self.window_proc.wait(timeout=2)
+                p.wait(timeout=2)
             except subprocess.TimeoutExpired:
-                # 2) 응답 없으면 강제 종료
-                self.window_proc.kill()
+                p.kill()
                 try:
-                    self.window_proc.wait(timeout=2)
+                    p.wait(timeout=2)
                 except subprocess.TimeoutExpired:
                     pass
-            self.window_proc = None
+            self.procs[key] = None
         else:
             rumps.notification(
-                title="포트폴리오 모니터",
-                subtitle="",
+                title="포트폴리오 모니터", subtitle=label,
                 message="실행 중인 창이 없습니다",
             )
+
+    def close_v2(self, _sender):
+        self._close("v2", "신규 카드 UI")
+
+    def close_v1(self, _sender):
+        self._close("v1", "기존 테이블 UI")
 
 
 if __name__ == "__main__":
