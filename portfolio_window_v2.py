@@ -40,6 +40,7 @@ from portfolio_window import (  # noqa: E402
     fetch_peak_since_buy,
     FUT_FULL_NAME, resolve_us_indicator_url,
     is_market_open, market_of_symbol,
+    kr_session_phase,
 )
 import fundamentals  # noqa: E402
 
@@ -517,10 +518,17 @@ class StockCardsCanvas:
 
         day_diff = cur_price - base_price if base_price else 0
         day_pct = (day_diff / base_price * 100) if base_price else 0
-        # 오늘 체결 없으면 어제보다 0 (cur_price 가 어제 종가 그대로라 day_diff 가 잘못 잡힘)
+        # 오늘 체결 없으면 어제보다 0 (cur_price 가 어제 종가 그대로라 day_diff 가 잘못 잡힘).
+        # 단, 자정 ~ 프리마켓 시작(08:00 KST) 전까지는 toss 가 여전히 어제 데이터를 주므로
+        # "어제의 어제보다" 를 그대로 표시 → 0 강제 변환을 스킵.
         _today_kst = caches.get("today_kst", "")
         _trade_date = price_data.get("trade_date", "") if price_data else ""
-        if _today_kst and _trade_date != _today_kst:
+        try:
+            from zoneinfo import ZoneInfo
+            _show_prev = datetime.now(ZoneInfo("Asia/Seoul")).hour < 8
+        except Exception:
+            _show_prev = False
+        if _today_kst and _trade_date != _today_kst and not _show_prev:
             day_diff = 0
             day_pct = 0
 
@@ -542,10 +550,28 @@ class StockCardsCanvas:
                          and from_peak_pct <= trail_th
                          and abs(from_peak_pct) >= 0.01)
 
-        # 장마감 페이드 (KR 마감 + 토글 ON 일 때만)
-        # 거래 활성 여부 — 오늘 체결이 있으면 활성. trade_date 가 오늘이 아니면 휴장
+        # 장마감 페이드 (v1 테이블과 동일한 phase 기반 + 10분 무거래 규칙)
+        # - REGULAR (09:00-15:20 평일): 항상 활성
+        # - EXTENDED (08:00-08:50, 15:30-20:00 평일): 마지막 체결 후 10분 이상 경과 시 휴면
+        # - CLOSED (그 외): 항상 휴면
         trade_date = price_data.get("trade_date", "") if price_data else ""
-        kr_closed = (trade_date != caches.get("today_kst", ""))
+        trade_dt_iso = price_data.get("trade_dt", "") if price_data else ""
+        phase = kr_session_phase()
+        if phase == "REGULAR":
+            kr_closed = False
+        elif phase == "CLOSED":
+            kr_closed = True
+        else:  # EXTENDED — 10분 이상 무거래 시 휴면
+            minutes_since = float("inf")
+            if trade_dt_iso:
+                try:
+                    from zoneinfo import ZoneInfo
+                    td = datetime.fromisoformat(trade_dt_iso)
+                    now_kst = datetime.now(ZoneInfo("Asia/Seoul"))
+                    minutes_since = (now_kst - td).total_seconds() / 60
+                except Exception:
+                    pass
+            kr_closed = minutes_since >= 10
         fade = caches.get("fade_sleeping", False) and kr_closed
         def _fc(color, ratio=0.5):
             return _fade_hex(color, ratio) if fade else color
@@ -1529,9 +1555,25 @@ class USIndicesV1Style:
         t = stock["ticker"]
         url = f"https://tossinvest.com/stocks/A{t}"
         price_txt = f"{int(price):,}" if price else "-"
-        # 거래 활성 여부 — 오늘 체결 있으면 활성 (trade_date 가 오늘이 아니면 휴장)
-        trade_date = price_data.get("trade_date", "") or ""
-        closed = (trade_date != getattr(self, "_today_kst", ""))
+        # 거래 활성 여부 — 보유 카드와 동일한 phase + 10분 규칙
+        # REGULAR: 활성 / EXTENDED: 10분 무거래면 휴면 / CLOSED: 항상 휴면
+        trade_dt_iso = price_data.get("trade_dt", "") or ""
+        phase = kr_session_phase()
+        if phase == "REGULAR":
+            closed = False
+        elif phase == "CLOSED":
+            closed = True
+        else:
+            minutes_since = float("inf")
+            if trade_dt_iso:
+                try:
+                    from zoneinfo import ZoneInfo
+                    td = datetime.fromisoformat(trade_dt_iso)
+                    now_kst = datetime.now(ZoneInfo("Asia/Seoul"))
+                    minutes_since = (now_kst - td).total_seconds() / 60
+                except Exception:
+                    pass
+            closed = minutes_since >= 10
         zz = "💤" if closed else ""
         name_disp = f"{zz}{stock.get('name', t)}"
         fade = bool(self._fade_sleeping) and closed
@@ -1541,6 +1583,246 @@ class USIndicesV1Style:
                             price_txt=price_txt, pct_value=pct,
                             url=url, fade=fade, bg_default=bg,
                             name_fg_base="#2c3e50")
+
+
+# ─────────────────────────── 그룹 탭 바 ───────────────────────────
+class GroupTabBar(tk.Frame):
+    """가로 스크롤 가능한 커스텀 탭 바.
+    - 시스템 탭(closable=False): X 버튼 없음, 좌측 고정.
+    - 사용자 그룹 탭(closable=True): 우측 X 클릭 시 on_close 호출.
+    - 우측 끝 + 그룹 버튼 → on_add 호출.
+    - 탭 폭 합 > 가용 폭이면 좌우 ◀▶ 화살표 활성, 휠 가로 스크롤 지원.
+    """
+
+    TAB_FONT = ("SF Pro Text", 12, "bold") if sys.platform == "darwin" \
+                else ("Segoe UI", 11, "bold")
+    PAD_X = 14
+    PAD_Y = 8
+    GAP = 4
+
+    COL_BG = COL_BG_APP
+    COL_TAB = "#ffffff"
+    COL_TAB_HOVER = "#eef1f5"
+    COL_TAB_ACTIVE = "#1f4e8f"
+    COL_TAB_ACTIVE_FG = "#ffffff"
+    COL_TAB_FG = COL_PRIMARY
+    COL_BORDER = COL_BORDER
+    COL_X = "#9ca3af"
+    COL_X_HOVER = "#c0392b"
+
+    def __init__(self, parent, *, on_select, on_close, on_add):
+        super().__init__(parent, bg=self.COL_BG, height=44)
+        self.pack_propagate(False)
+        self._on_select = on_select
+        self._on_close = on_close
+        self._on_add = on_add
+
+        self._tabs = []        # [{"key", "label", "closable"}, ...]
+        self._tab_widgets = {} # key -> Frame
+        self._selected = None
+
+        # 좌측 화살표
+        self._left_btn = tk.Label(self, text="◀", bg=self.COL_BG,
+                                    fg=COL_SECONDARY, font=self.TAB_FONT,
+                                    cursor="hand2", padx=8)
+        self._left_btn.pack(side="left", fill="y")
+        self._left_btn.bind("<Button-1>", lambda e: self._scroll_by(-120))
+
+        # 우측 화살표
+        self._right_btn = tk.Label(self, text="▶", bg=self.COL_BG,
+                                     fg=COL_SECONDARY, font=self.TAB_FONT,
+                                     cursor="hand2", padx=8)
+        self._right_btn.pack(side="right", fill="y")
+        self._right_btn.bind("<Button-1>", lambda e: self._scroll_by(120))
+
+        # + 그룹 버튼 (우측 화살표 안쪽)
+        self._add_btn = tk.Label(self, text="＋ 그룹", bg=self.COL_BG,
+                                   fg=COL_PRIMARY, font=self.TAB_FONT,
+                                   cursor="hand2", padx=10)
+        self._add_btn.pack(side="right", fill="y")
+        self._add_btn.bind("<Button-1>", lambda e: self._on_add())
+        self._add_btn.bind("<Enter>",
+                            lambda e: self._add_btn.config(fg=self.COL_TAB_ACTIVE))
+        self._add_btn.bind("<Leave>",
+                            lambda e: self._add_btn.config(fg=COL_PRIMARY))
+
+        # 가운데 Canvas (가로 스크롤 영역)
+        self._canvas = tk.Canvas(self, bg=self.COL_BG, height=44,
+                                   highlightthickness=0, bd=0)
+        self._canvas.pack(side="left", fill="both", expand=True)
+
+        # Canvas 안에 inner Frame — 여기에 탭들이 가로로 packing
+        self._inner = tk.Frame(self._canvas, bg=self.COL_BG)
+        self._inner_id = self._canvas.create_window(
+            (0, 0), window=self._inner, anchor="nw")
+
+        self._inner.bind("<Configure>", self._on_inner_configure)
+        self._canvas.bind("<Configure>", self._on_canvas_configure)
+        self._canvas.bind("<Enter>", lambda e: self._bind_wheel())
+        self._canvas.bind("<Leave>", lambda e: self._unbind_wheel())
+
+    # ───────── 외부 API ─────────
+    def set_tabs(self, tabs):
+        """탭 정의 갱신 후 다시 그림. 선택 상태는 가능한 한 유지."""
+        self._tabs = list(tabs)
+        for w in self._tab_widgets.values():
+            w.destroy()
+        self._tab_widgets = {}
+        for tab in self._tabs:
+            self._tab_widgets[tab["key"]] = self._make_tab(tab)
+        # 선택 유지 또는 첫 탭 선택
+        if self._selected and self._selected in self._tab_widgets:
+            self._paint_selection()
+        elif self._tabs:
+            self.select(self._tabs[0]["key"])
+        self._update_arrows()
+
+    def select(self, key):
+        if key not in self._tab_widgets:
+            return
+        prev = self._selected
+        self._selected = key
+        self._paint_selection()
+        self._ensure_visible(key)
+        if prev != key:
+            self._on_select(key)
+
+    def selected(self):
+        return self._selected
+
+    # ───────── 내부 ─────────
+    def _make_tab(self, tab):
+        key = tab["key"]
+        frm = tk.Frame(self._inner, bg=self.COL_TAB,
+                        highlightbackground=self.COL_BORDER,
+                        highlightthickness=1)
+        frm.pack(side="left", padx=(0, self.GAP), pady=4)
+        lbl = tk.Label(frm, text=tab["label"], bg=self.COL_TAB,
+                        fg=self.COL_TAB_FG, font=self.TAB_FONT,
+                        padx=self.PAD_X, pady=self.PAD_Y, cursor="hand2")
+        lbl.pack(side="left")
+        widgets = [frm, lbl]
+        x_lbl = None
+        if tab.get("closable"):
+            x_lbl = tk.Label(frm, text="✕", bg=self.COL_TAB,
+                              fg=self.COL_X, font=("SF Pro Text", 10),
+                              padx=6, pady=self.PAD_Y, cursor="hand2")
+            x_lbl.pack(side="left")
+            x_lbl.bind("<Button-1>",
+                        lambda e, k=key: (self._on_close(k), "break")[1])
+            x_lbl.bind("<Enter>",
+                        lambda e: x_lbl.config(fg=self.COL_X_HOVER))
+            x_lbl.bind("<Leave>",
+                        lambda e: x_lbl.config(
+                            fg=(self.COL_TAB_ACTIVE_FG
+                                 if self._selected == key
+                                 else self.COL_X)))
+            widgets.append(x_lbl)
+        for w in (frm, lbl):
+            w.bind("<Button-1>", lambda e, k=key: self.select(k))
+            w.bind("<Enter>", lambda e, k=key: self._hover(k, True))
+            w.bind("<Leave>", lambda e, k=key: self._hover(k, False))
+        frm._lbl = lbl
+        frm._x = x_lbl
+        return frm
+
+    def _hover(self, key, entering):
+        if key == self._selected:
+            return
+        frm = self._tab_widgets.get(key)
+        if not frm:
+            return
+        bg = self.COL_TAB_HOVER if entering else self.COL_TAB
+        frm.config(bg=bg)
+        frm._lbl.config(bg=bg)
+        if frm._x is not None:
+            frm._x.config(bg=bg)
+
+    def _paint_selection(self):
+        for key, frm in self._tab_widgets.items():
+            active = (key == self._selected)
+            bg = self.COL_TAB_ACTIVE if active else self.COL_TAB
+            fg = self.COL_TAB_ACTIVE_FG if active else self.COL_TAB_FG
+            x_fg = self.COL_TAB_ACTIVE_FG if active else self.COL_X
+            frm.config(bg=bg)
+            frm._lbl.config(bg=bg, fg=fg)
+            if frm._x is not None:
+                frm._x.config(bg=bg, fg=x_fg)
+
+    def _on_inner_configure(self, _e):
+        self._canvas.configure(scrollregion=self._canvas.bbox("all"))
+        self._update_arrows()
+
+    def _on_canvas_configure(self, e):
+        self._canvas.itemconfigure(self._inner_id, height=e.height)
+        self._update_arrows()
+
+    def _update_arrows(self):
+        # 탭 영역 폭 vs Canvas 폭 비교
+        try:
+            self.update_idletasks()
+        except Exception:
+            pass
+        try:
+            inner_w = self._inner.winfo_reqwidth()
+            cv_w = self._canvas.winfo_width()
+        except Exception:
+            return
+        scrollable = inner_w > cv_w + 2
+        for btn in (self._left_btn, self._right_btn):
+            btn.config(fg=COL_SECONDARY if scrollable else COL_MUTED,
+                        cursor="hand2" if scrollable else "arrow")
+
+    def _scroll_by(self, dx):
+        try:
+            self._canvas.xview_scroll(dx // 20 or (1 if dx > 0 else -1),
+                                        "units")
+        except Exception:
+            pass
+
+    def _bind_wheel(self):
+        for seq in ("<MouseWheel>", "<Shift-MouseWheel>",
+                     "<Button-4>", "<Button-5>"):
+            self._canvas.bind_all(seq, self._on_wheel)
+
+    def _unbind_wheel(self):
+        for seq in ("<MouseWheel>", "<Shift-MouseWheel>",
+                     "<Button-4>", "<Button-5>"):
+            try:
+                self._canvas.unbind_all(seq)
+            except Exception:
+                pass
+
+    def _on_wheel(self, e):
+        # macOS: delta 부호. Linux: Button-4 위, Button-5 아래.
+        if getattr(e, "num", None) == 4:
+            delta = -1
+        elif getattr(e, "num", None) == 5:
+            delta = 1
+        else:
+            delta = -1 if e.delta > 0 else 1
+        self._canvas.xview_scroll(delta * 2, "units")
+        return "break"
+
+    def _ensure_visible(self, key):
+        frm = self._tab_widgets.get(key)
+        if not frm:
+            return
+        try:
+            self.update_idletasks()
+            x1 = frm.winfo_x()
+            x2 = x1 + frm.winfo_width()
+            cv_w = self._canvas.winfo_width()
+            xview = self._canvas.xview()
+            inner_w = max(self._inner.winfo_reqwidth(), cv_w)
+            view_left = xview[0] * inner_w
+            view_right = view_left + cv_w
+            if x1 < view_left:
+                self._canvas.xview_moveto(x1 / inner_w)
+            elif x2 > view_right:
+                self._canvas.xview_moveto((x2 - cv_w) / inner_w)
+        except Exception:
+            pass
 
 
 # ─────────────────────────── 메인 윈도우 ───────────────────────────
@@ -1553,24 +1835,21 @@ class PortfolioWindowV2:
 
     TAB_US = "us"
     TAB_HOLD = "hold"
-    TAB_WATCH = "watch"
+    # 사용자 그룹 탭 prefix — 그룹명을 그대로 탭 키로 사용: f"{TAB_GROUP_PREFIX}{name}"
+    TAB_GROUP_PREFIX = "g:"
+    # 시스템 예약 account (사용자 그룹과 분리)
+    RESERVED_ACCOUNTS = {"퇴직연금", "관심ETF"}
+    # 첫 실행 마이그레이션 시 보장되는 기본 그룹 — 이후 사용자가 삭제 가능
+    DEFAULT_USER_GROUP = "관심"
 
     def __init__(self):
         self.holdings_data = load_json(HOLDINGS_PATH, default={})
-        all_stocks = self.holdings_data.get("holdings", [])
-        # account 필드로 분류
+        # account 필드 분류
         #   ""  / None      → 보유 종목 탭 (실보유)
-        #   "퇴직연금"      → 퇴직연금 탭
-        #   "관심"          → 관심 종목 탭
-        #   "관심ETF"       → 미국 증시 탭 우측 ETF 컬럼
-        self.holdings = [s for s in all_stocks
-                          if not (s.get("account") or "")]
-        self.pension = [s for s in all_stocks
-                          if s.get("account") == "퇴직연금"]
-        self.watchlist = [s for s in all_stocks
-                            if s.get("account") == "관심"]
-        self.etf_holdings = [s for s in all_stocks
-                              if s.get("account") == "관심ETF"]
+        #   "퇴직연금"      → 보유 탭 안 합산 (시스템 예약)
+        #   "관심ETF"       → 미국 증시 탭 우측 ETF (시스템 예약)
+        #   그 외           → 사용자 그룹 (관심 포함, 동적 탭)
+        self._classify_holdings()
         self.config = load_json(CONFIG_PATH, default={
             "stop_loss_alert_pct": -9.0,
             "trailing_stop_alert_pct": -9.0,
@@ -1591,8 +1870,8 @@ class PortfolioWindowV2:
         self.last_prices = {}
 
         # dirty 마킹 (탭별)
-        self.dirty = {self.TAB_US: True, self.TAB_HOLD: True,
-                       self.TAB_WATCH: True}
+        # 그룹 탭의 dirty 는 _refresh_tabs() 가 추가
+        self.dirty = {self.TAB_US: True, self.TAB_HOLD: True}
         self.current_tab = self.TAB_HOLD
 
         # 윈도우
@@ -1673,12 +1952,9 @@ class PortfolioWindowV2:
                         command=self._on_fade_toggle
                        ).pack(side="left", padx=(12, 0))
 
-        # 액션 버튼들
+        # 액션 버튼들 — 보유 추가/삭제, 관심 삭제는 카드 우클릭으로 제공
         for txt, cmd in [
-            ("💼 보유 추가",   self._add_holding),
-            ("💼 보유 삭제",   self._prompt_delete_holding),
-            ("⭐ 관심 추가",   self._add_watchlist),
-            ("⭐ 관심 삭제",   self._prompt_delete_watchlist),
+            ("🔍 종목 검색",   self._open_search_dialog),
             ("📤 JSON 내보내기", self._export_holdings_json),
             ("📥 JSON 가져오기", self._import_holdings_json),
         ]:
@@ -1690,12 +1966,22 @@ class PortfolioWindowV2:
                                     font=_font(11))
         self.time_label.pack(side="right")
 
-        self.notebook = ttk.Notebook(self.root)
-        self.notebook.pack(side="top", fill="both", expand=True, padx=4, pady=4)
+        # 커스텀 탭 바 + 본문 컨테이너
+        self.tab_bar = GroupTabBar(self.root,
+                                     on_select=self._on_tab_select,
+                                     on_close=self._on_close_group,
+                                     on_add=self._on_add_group)
+        self.tab_bar.pack(side="top", fill="x", padx=4, pady=(4, 0))
 
-        # 미국 — v1 스타일 섹터 테이블 (ETF + 종목설명 포함)
-        us_frame = tk.Frame(self.notebook, bg="white")
-        self.notebook.add(us_frame, text="📈  미국 증시")
+        self.body = tk.Frame(self.root, bg=COL_BG_APP)
+        self.body.pack(side="top", fill="both", expand=True, padx=4, pady=4)
+
+        # 시스템 프레임 — 미국 증시
+        self._tab_frames = {}
+        self._group_panels = {}  # group_key -> StockCardsCanvas
+
+        us_frame = tk.Frame(self.body, bg="white")
+        self._tab_frames[self.TAB_US] = us_frame
         self.us_panel = USIndicesV1Style(
             us_frame,
             on_open_url=lambda url: threading.Thread(
@@ -1703,35 +1989,241 @@ class PortfolioWindowV2:
             ).start(),
         )
 
-        # 보유
-        hold_frame = tk.Frame(self.notebook, bg=COL_BG_APP)
-        self.notebook.add(hold_frame, text="💼  보유 종목")
+        # 시스템 프레임 — 보유 종목
+        hold_frame = tk.Frame(self.body, bg=COL_BG_APP)
+        self._tab_frames[self.TAB_HOLD] = hold_frame
         self.holdings_panel = StockCardsCanvas(
             hold_frame, watchlist=False,
             on_click=self._on_card_click,
             on_right_click=self._on_card_right_click,
             on_valuation=self._on_open_valuation)
 
-        # 관심
-        watch_frame = tk.Frame(self.notebook, bg=COL_BG_APP)
-        self.notebook.add(watch_frame, text="👀  관심 종목")
-        self.watch_panel = StockCardsCanvas(
-            watch_frame, watchlist=True,
+        # 사용자 그룹은 _refresh_tabs() 에서 lazy 생성
+        self._refresh_tabs()
+        self.tab_bar.select(self.TAB_HOLD)
+
+    # ───────── 탭 정의 갱신 ─────────
+    def _group_tab_key(self, group):
+        return f"{self.TAB_GROUP_PREFIX}{group}"
+
+    def _ensure_group_panel(self, group):
+        """그룹별 Frame + StockCardsCanvas 인스턴스를 lazy 생성 후 반환."""
+        key = self._group_tab_key(group)
+        if key in self._tab_frames:
+            return key
+        frame = tk.Frame(self.body, bg=COL_BG_APP)
+        self._tab_frames[key] = frame
+        self._group_panels[key] = StockCardsCanvas(
+            frame, watchlist=True,
             on_click=self._on_card_click,
             on_right_click=self._on_card_right_click,
             on_valuation=self._on_open_valuation)
+        self.dirty[key] = True
+        return key
 
-        self.notebook.select(hold_frame)
-
-        # 탭 전환 이벤트
-        self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
+    def _refresh_tabs(self):
+        """현재 self.user_groups 기준으로 탭 바 재구성 + 사라진 그룹 정리."""
+        # 사라진 그룹의 frame/panel 정리
+        valid_keys = {self.TAB_US, self.TAB_HOLD} | {
+            self._group_tab_key(g) for g in self.user_groups}
+        for key in list(self._tab_frames.keys()):
+            if key not in valid_keys:
+                try:
+                    self._tab_frames[key].destroy()
+                except Exception:
+                    pass
+                self._tab_frames.pop(key, None)
+                self._group_panels.pop(key, None)
+                self.dirty.pop(key, None)
+        # 신규 그룹 lazy 생성
+        for g in self.user_groups:
+            self._ensure_group_panel(g)
+        # 탭 정의 — 시스템 먼저, 그 뒤 사용자 그룹
+        tabs = [
+            {"key": self.TAB_US, "label": "📈  미국 증시", "closable": False},
+            {"key": self.TAB_HOLD, "label": "💼  보유 종목", "closable": False},
+        ]
+        for g in self.user_groups:
+            label = (f"⭐  {g}" if g == self.DEFAULT_USER_GROUP
+                      else f"🏷  {g}")
+            tabs.append({"key": self._group_tab_key(g), "label": label,
+                          "closable": True})
+        self.tab_bar.set_tabs(tabs)
 
     # ───────── 탭 전환 ─────────
-    def _on_tab_changed(self, _evt):
-        idx = self.notebook.index(self.notebook.select())
-        self.current_tab = [self.TAB_US, self.TAB_HOLD, self.TAB_WATCH][idx]
+    def _on_tab_select(self, key):
+        self.current_tab = key
+        # 본문 swap
+        for k, frame in self._tab_frames.items():
+            if k == key:
+                frame.pack(in_=self.body, fill="both", expand=True)
+            else:
+                frame.pack_forget()
         if self.dirty.get(self.current_tab):
             self._render_current_tab()
+
+    # ───────── 그룹 추가/삭제 콜백 (Phase 5 에서 다이얼로그 구현) ─────────
+    def _on_add_group(self):
+        # Phase 5 에서 구체화 — 임시: 입력 다이얼로그
+        from tkinter import simpledialog, messagebox
+        name = simpledialog.askstring("새 그룹", "그룹 이름:", parent=self.root)
+        if not name:
+            return
+        name = name.strip()
+        if not name:
+            return
+        if name in self.RESERVED_ACCOUNTS:
+            messagebox.showerror("이름 오류",
+                f"'{name}' 은 시스템 예약 이름입니다", parent=self.root); return
+        if name in self.user_groups:
+            messagebox.showwarning("중복", f"'{name}' 그룹이 이미 있음",
+                                     parent=self.root); return
+        self.user_groups.append(name)
+        self.group_stocks[name] = []
+        self.holdings_data["groups"] = list(self.user_groups)
+        save_json(HOLDINGS_PATH, self.holdings_data)
+        self._refresh_tabs()
+        self.tab_bar.select(self._group_tab_key(name))
+
+    def _on_close_group(self, key):
+        from tkinter import messagebox
+        if not key.startswith(self.TAB_GROUP_PREFIX):
+            return
+        group = key[len(self.TAB_GROUP_PREFIX):]
+        stocks = self.group_stocks.get(group, [])
+        if not stocks:
+            if not messagebox.askyesno("그룹 삭제",
+                    f"'{group}' 그룹을 삭제할까요?", parent=self.root):
+                return
+            self._do_delete_group(group, move_to=None)
+            return
+        # 종목 있음 — 이동/삭제 선택 다이얼로그
+        self._open_close_group_dialog(group, stocks)
+
+    def _do_delete_group(self, group, move_to=None):
+        """user_groups 에서 group 제거.
+        move_to=None → 그룹 종목 완전 삭제.
+        move_to="<name>" → 종목들의 account 를 move_to 로 변경(필요 시 신규 그룹 자동 추가)."""
+        if move_to is None:
+            self.holdings_data["holdings"] = [
+                s for s in self.holdings_data.get("holdings", [])
+                if s.get("account") != group
+            ]
+        else:
+            for s in self.holdings_data.get("holdings", []):
+                if s.get("account") == group:
+                    s["account"] = move_to
+            if move_to not in self.user_groups and move_to not in self.RESERVED_ACCOUNTS:
+                self.user_groups.append(move_to)
+        self.user_groups = [g for g in self.user_groups if g != group]
+        self.holdings_data["groups"] = list(self.user_groups)
+        save_json(HOLDINGS_PATH, self.holdings_data)
+        if self.current_tab == self._group_tab_key(group):
+            self.tab_bar.select(self.TAB_HOLD)
+        self._reload_data()
+
+    def _open_close_group_dialog(self, group, stocks):
+        """그룹 삭제 시 종목 처리 옵션 다이얼로그 (이동 / 완전삭제)."""
+        from tkinter import messagebox, simpledialog
+        prev_tm = self.root.attributes("-topmost")
+        self.root.attributes("-topmost", False)
+
+        dlg = tk.Toplevel(self.root)
+        dlg.title(f"🗑 그룹 삭제 — {group}")
+        dlg.transient(self.root); dlg.grab_set()
+        dlg.attributes("-topmost", True); dlg.lift(); dlg.focus_force()
+        dlg.bind("<Destroy>", lambda e: self.root.attributes("-topmost", prev_tm)
+                  if e.widget is dlg else None)
+        dlg.resizable(False, False)
+
+        frm = tk.Frame(dlg, padx=14, pady=12, bg="white")
+        frm.pack(fill="both", expand=True)
+
+        tk.Label(frm,
+                  text=f"'{group}' 그룹에 {len(stocks)}개 종목이 있습니다.\n"
+                        "어떻게 처리할까요?",
+                  bg="white", justify="left", font=_font(12)
+                 ).pack(anchor="w", pady=(0, 12))
+
+        mode = tk.StringVar(value="move")
+        other_groups = [g for g in self.user_groups if g != group]
+
+        move_row = tk.Frame(frm, bg="white")
+        move_row.pack(anchor="w", fill="x", pady=2)
+        tk.Radiobutton(move_row, text="다른 그룹으로 이동:",
+                        variable=mode, value="move",
+                        bg="white", font=_font(11)
+                       ).pack(side="left")
+        target_var = tk.StringVar(value=(other_groups[0] if other_groups else ""))
+        target_combo = ttk.Combobox(move_row, textvariable=target_var,
+                                     values=other_groups,
+                                     state="readonly", width=18)
+        target_combo.pack(side="left", padx=(8, 6))
+
+        def _new_group():
+            n = simpledialog.askstring("새 그룹",
+                "새 그룹 이름:", parent=dlg)
+            if not n:
+                return
+            n = n.strip()
+            if not n:
+                return
+            if n == group or n in self.RESERVED_ACCOUNTS:
+                messagebox.showerror("이름 오류",
+                    "사용할 수 없는 이름", parent=dlg); return
+            cur_vals = list(target_combo.cget("values"))
+            if n not in cur_vals:
+                cur_vals.append(n)
+                target_combo.config(values=cur_vals)
+            target_var.set(n)
+            mode.set("move")
+        tk.Button(move_row, text="➕ 새 그룹...",
+                   command=_new_group, font=_font(10)
+                  ).pack(side="left")
+
+        tk.Radiobutton(frm,
+                        text="종목들도 모두 완전 삭제",
+                        variable=mode, value="delete",
+                        bg="white", fg=COL_PILL_DANGER, font=_font(11)
+                       ).pack(anchor="w", pady=(6, 12))
+
+        if not other_groups:
+            tk.Label(frm,
+                      text="이동 가능한 그룹이 없습니다 — "
+                            "새 그룹을 만들거나 완전 삭제를 선택하세요",
+                      bg="white", fg=COL_MUTED, font=_font(9)
+                     ).pack(anchor="w", pady=(0, 6))
+            mode.set("delete")
+
+        btns = tk.Frame(frm, bg="white")
+        btns.pack(fill="x", pady=(6, 0))
+
+        def _ok():
+            if mode.get() == "move":
+                tgt = (target_var.get() or "").strip()
+                if not tgt:
+                    messagebox.showerror("선택 필요",
+                        "이동할 그룹을 선택하거나 새로 만드세요",
+                        parent=dlg); return
+                if tgt == group:
+                    messagebox.showerror("선택 오류",
+                        "자기 자신으로는 이동 불가", parent=dlg); return
+                self._do_delete_group(group, move_to=tgt)
+            else:
+                if not messagebox.askyesno("최종 확인",
+                    f"'{group}' 그룹과 {len(stocks)}개 종목을 "
+                    "모두 삭제합니다.\n되돌릴 수 없습니다. 진행할까요?",
+                    parent=dlg):
+                    return
+                self._do_delete_group(group, move_to=None)
+            dlg.destroy()
+
+        ttk.Button(btns, text="취소", command=dlg.destroy
+                    ).pack(side="right", padx=4)
+        ttk.Button(btns, text="확인", command=_ok
+                    ).pack(side="right", padx=4)
+        dlg.bind("<Return>", lambda e: _ok())
+        dlg.bind("<Escape>", lambda e: dlg.destroy())
 
     def _toggle_topmost(self):
         self.root.attributes("-topmost", bool(self.topmost_var.get()))
@@ -1763,6 +2255,35 @@ class PortfolioWindowV2:
                        command=lambda: self._on_open_valuation(ticker, ""))
         m.add_command(label="피크 초기화",
                        command=lambda: self._reset_peak(ticker))
+        # 탭별 컨텍스트 액션
+        cur = getattr(self, "current_tab", "") or ""
+        if cur == self.TAB_HOLD:
+            m.add_separator()
+            m.add_command(label="💼 보유 삭제",
+                           command=lambda: self._delete_holding(ticker))
+        elif cur.startswith(self.TAB_GROUP_PREFIX):
+            group = cur[len(self.TAB_GROUP_PREFIX):]
+            m.add_separator()
+            m.add_command(label="💼 보유로 추가",
+                           command=lambda: self._add_holding(
+                               prefilled_ticker=ticker))
+            # 다른 그룹으로 이동 cascade
+            other_groups = [g for g in self.user_groups if g != group]
+            move_sub = tk.Menu(m, tearoff=0)
+            for g in other_groups:
+                icon = "⭐" if g == self.DEFAULT_USER_GROUP else "🏷"
+                move_sub.add_command(
+                    label=f"{icon} {g}",
+                    command=lambda dst=g: self._move_to_group(
+                        ticker, group, dst))
+            if other_groups:
+                move_sub.add_separator()
+            move_sub.add_command(label="➕ 새 그룹...",
+                                  command=lambda: self._move_to_new_group(
+                                      ticker, group))
+            m.add_cascade(label="↪ 다른 그룹으로 이동", menu=move_sub)
+            m.add_command(label=f"🗑 '{group}' 에서 제거",
+                           command=lambda: self._delete_watchlist(ticker, group))
         try:
             m.tk_popup(event.x_root, event.y_root)
         finally:
@@ -1781,15 +2302,53 @@ class PortfolioWindowV2:
             self._mark_dirty_all()
             self._render_current_tab()
 
-    # ───────── 데이터 리로드 ─────────
-    def _reload_data(self):
-        """holdings.json 다시 읽고 분류 + 모든 탭 dirty + 즉시 갱신."""
-        self.holdings_data = load_json(HOLDINGS_PATH, default={})
+    # ───────── 데이터 분류 / 리로드 ─────────
+    def _classify_holdings(self):
+        """holdings_data 를 시스템/사용자 그룹으로 분류.
+        사용자 그룹 정의 = holdings_data["groups"] (순서 보존 리스트).
+        없으면 stocks 의 account 값에서 추론하여 마이그레이션 + 디스크 반영."""
         all_stocks = self.holdings_data.get("holdings", [])
         self.holdings = [s for s in all_stocks if not (s.get("account") or "")]
         self.pension = [s for s in all_stocks if s.get("account") == "퇴직연금"]
-        self.watchlist = [s for s in all_stocks if s.get("account") == "관심"]
         self.etf_holdings = [s for s in all_stocks if s.get("account") == "관심ETF"]
+
+        user_groups = self.holdings_data.get("groups")
+        dirty_disk = False
+        if not isinstance(user_groups, list):
+            seen = []
+            for s in all_stocks:
+                acc = s.get("account") or ""
+                if acc and acc not in self.RESERVED_ACCOUNTS and acc not in seen:
+                    seen.append(acc)
+            if self.DEFAULT_USER_GROUP not in seen:
+                seen.insert(0, self.DEFAULT_USER_GROUP)
+            user_groups = seen
+            dirty_disk = True
+        else:
+            user_groups = [g for g in user_groups
+                            if isinstance(g, str) and g
+                            and g not in self.RESERVED_ACCOUNTS]
+            for s in all_stocks:
+                acc = s.get("account") or ""
+                if acc and acc not in self.RESERVED_ACCOUNTS and acc not in user_groups:
+                    user_groups.append(acc); dirty_disk = True
+        if dirty_disk:
+            self.holdings_data["groups"] = list(user_groups)
+            save_json(HOLDINGS_PATH, self.holdings_data)
+
+        self.user_groups = list(user_groups)
+        self.group_stocks = {g: [s for s in all_stocks if s.get("account") == g]
+                              for g in self.user_groups}
+        # 하위 호환 — 기존 코드가 self.watchlist 를 참조하는 경로 유지
+        self.watchlist = self.group_stocks.get(self.DEFAULT_USER_GROUP, [])
+
+    def _reload_data(self):
+        """holdings.json 다시 읽고 분류 + 모든 탭 dirty + 즉시 갱신."""
+        self.holdings_data = load_json(HOLDINGS_PATH, default={})
+        self._classify_holdings()
+        # 탭 바 동기화 (그룹 추가/삭제 반영) — _build_ui 이전엔 skip
+        if hasattr(self, "tab_bar"):
+            self._refresh_tabs()
         self._mark_dirty_all()
         self.refresh()  # 가격 재조회 → 자동 렌더
 
@@ -1799,13 +2358,14 @@ class PortfolioWindowV2:
         self._render_current_tab()
 
     # ───────── 보유 추가/삭제 ─────────
-    def _add_holding(self):
+    def _add_holding(self, prefilled_ticker=None, parent=None):
         from tkinter import messagebox
+        owner = parent or self.root
         prev_tm = self.root.attributes("-topmost")
         self.root.attributes("-topmost", False)
-        dlg = tk.Toplevel(self.root)
+        dlg = tk.Toplevel(owner)
         dlg.title("💼 보유 종목 추가")
-        dlg.transient(self.root); dlg.grab_set()
+        dlg.transient(owner); dlg.grab_set()
         dlg.attributes("-topmost", True); dlg.lift(); dlg.focus_force()
         dlg.bind("<Destroy>", lambda e: self.root.attributes("-topmost", prev_tm)
                   if e.widget is dlg else None)
@@ -1814,13 +2374,18 @@ class PortfolioWindowV2:
         labels = ["종목코드 (6자리)", "수량", "평균 매수가 (원)", "매수일 (YYYYMMDD)"]
         vars_ = [tk.StringVar() for _ in labels]
         vars_[3].set(datetime.now().strftime("%Y%m%d"))
+        if prefilled_ticker:
+            vars_[0].set(prefilled_ticker)
         entries = []
         for i, (lbl, v) in enumerate(zip(labels, vars_)):
             ttk.Label(frm, text=lbl).grid(row=i, column=0, sticky="w", padx=4, pady=4)
             e = ttk.Entry(frm, textvariable=v, width=20)
+            if i == 0 and prefilled_ticker:
+                e.config(state="readonly")
             e.grid(row=i, column=1, padx=4, pady=4)
             entries.append(e)
-        entries[0].focus_set()
+        # 첫 입력 가능 entry 에 포커스
+        (entries[1] if prefilled_ticker else entries[0]).focus_set()
         result = {"ok": False}
 
         def _submit():
@@ -1876,22 +2441,6 @@ class PortfolioWindowV2:
         save_json(HOLDINGS_PATH, self.holdings_data)
         self._reload_data()
 
-    def _prompt_delete_holding(self):
-        from tkinter import messagebox
-        if not self.holdings:
-            messagebox.showinfo("보유 종목", "보유 종목이 없습니다.", parent=self.root); return
-        menu = tk.Menu(self.root, tearoff=0)
-        for s in self.holdings:
-            t = s["ticker"]
-            menu.add_command(
-                label=f"{s.get('name', t)} ({t}) {s.get('shares', 0)}주",
-                command=lambda t=t: self._delete_holding(t))
-        x = self.root.winfo_pointerx(); y = self.root.winfo_pointery()
-        try:
-            menu.tk_popup(x, y)
-        finally:
-            menu.grab_release()
-
     def _delete_holding(self, ticker):
         from tkinter import messagebox
         stock = next((s for s in self.holdings if s["ticker"] == ticker), None)
@@ -1929,81 +2478,269 @@ class PortfolioWindowV2:
         save_json(HOLDINGS_PATH, self.holdings_data)
         self._reload_data()
 
-    # ───────── 관심 추가/삭제 ─────────
-    def _add_watchlist(self):
+    # ───────── 종목 검색 / 관심 그룹 추가 ─────────
+    @staticmethod
+    def _search_stocks(query, limit=20):
+        """국내 종목 자동완성 (Naver). KOSPI/KOSDAQ 6자리 종목만 반환."""
+        try:
+            r = requests.get(
+                "https://m.stock.naver.com/front-api/search/autoComplete",
+                params={"query": query, "target": "stock"},
+                headers={"User-Agent": USER_AGENT,
+                          "Referer": "https://m.stock.naver.com/"},
+                timeout=5)
+            items = (r.json() or {}).get("result", {}).get("items", []) or []
+        except Exception:
+            items = []
+        out = []
+        for it in items[:limit]:
+            code = (it.get("code") or "").strip()
+            if not (code.isdigit() and len(code) == 6):
+                continue
+            out.append({
+                "ticker": code,
+                "name": it.get("name", "") or code,
+                "shares": 0, "avg_price": 0, "invested": 0, "buy_date": "",
+                "market": it.get("typeCode") or "KOSPI",
+                "account": "검색",
+            })
+        return out
+
+    def _open_search_dialog(self):
+        """🔍 종목 검색 / 추가 — Naver 자동완성 + 카드 뷰 + 우클릭 추가."""
         from tkinter import messagebox
         prev_tm = self.root.attributes("-topmost")
         self.root.attributes("-topmost", False)
-        dlg = tk.Toplevel(self.root); dlg.title("⭐ 관심 추가")
-        dlg.transient(self.root); dlg.grab_set()
+
+        dlg = tk.Toplevel(self.root)
+        dlg.title("🔍 종목 검색 / 추가")
+        dlg.geometry("1200x640")
+        dlg.transient(self.root)
         dlg.attributes("-topmost", True); dlg.lift(); dlg.focus_force()
         dlg.bind("<Destroy>", lambda e: self.root.attributes("-topmost", prev_tm)
                   if e.widget is dlg else None)
-        frm = ttk.Frame(dlg, padding=12); frm.grid(sticky="nsew")
-        ttk.Label(frm, text="종목코드 (6자리)").grid(row=0, column=0, sticky="w", padx=4, pady=4)
-        code_var = tk.StringVar()
-        e = ttk.Entry(frm, textvariable=code_var, width=20)
-        e.grid(row=0, column=1, padx=4, pady=4); e.focus_set()
-        result = {"ok": False}
 
-        def _submit():
-            code = code_var.get().strip()
-            if not (code.isdigit() and len(code) == 6):
-                messagebox.showerror("입력 오류", "6자리 숫자 종목코드 필요", parent=dlg); return
-            if any(s["ticker"] == code for s in self.holdings_data.get("holdings", [])):
-                messagebox.showwarning("중복", "이미 목록에 있음", parent=dlg); return
-            result.update({"ok": True, "code": code}); dlg.destroy()
+        # 상단 검색 바
+        top = tk.Frame(dlg, bg=COL_BG_APP)
+        top.pack(side="top", fill="x", padx=10, pady=10)
+        tk.Label(top, text="검색", bg=COL_BG_APP, font=_font(12, "bold")
+                  ).pack(side="left")
+        q_var = tk.StringVar()
+        entry = tk.Entry(top, textvariable=q_var, font=_font(13), width=30)
+        entry.pack(side="left", padx=(8, 6))
+        tk.Label(top, text="(종목명 또는 6자리 코드)", bg=COL_BG_APP,
+                  fg=COL_MUTED, font=_font(10)).pack(side="left", padx=(0, 6))
 
-        btns = ttk.Frame(frm); btns.grid(row=1, column=0, columnspan=2, pady=(8, 0))
-        ttk.Button(btns, text="추가", command=_submit).pack(side="left", padx=4)
-        ttk.Button(btns, text="취소", command=dlg.destroy).pack(side="left", padx=4)
-        dlg.bind("<Return>", lambda e: _submit())
+        status = tk.Label(top, text="", bg=COL_BG_APP, fg=COL_SECONDARY,
+                           font=_font(10))
+        status.pack(side="right")
+
+        # 본문 — 카드 캔버스 (관심과 동일 모드)
+        body = tk.Frame(dlg, bg=COL_BG_APP)
+        body.pack(side="top", fill="both", expand=True, padx=10, pady=(0, 10))
+
+        def on_click(ticker):
+            self._on_card_click(ticker)
+
+        def on_right_click(ticker, event):
+            m = tk.Menu(dlg, tearoff=0)
+            m.add_command(label="토스에서 열기",
+                           command=lambda: self._on_card_click(ticker))
+            m.add_command(label="기업가치 보기",
+                           command=lambda: self._on_open_valuation(ticker, ""))
+            m.add_separator()
+            m.add_command(label="💼 보유 추가",
+                           command=lambda: self._add_holding(
+                               prefilled_ticker=ticker, parent=dlg))
+            sub = tk.Menu(m, tearoff=0)
+            for g in self.user_groups:
+                label = (f"⭐ {g}" if g == self.DEFAULT_USER_GROUP
+                          else f"🏷 {g}")
+                sub.add_command(label=label,
+                                 command=lambda grp=g: self._add_to_group(
+                                     ticker, grp, parent=dlg))
+            if self.user_groups:
+                sub.add_separator()
+            sub.add_command(label="➕ 새 그룹...",
+                             command=lambda: self._add_to_new_group(
+                                 ticker, parent=dlg))
+            m.add_cascade(label="⭐ 관심에 추가", menu=sub)
+            try:
+                m.tk_popup(event.x_root, event.y_root)
+            finally:
+                m.grab_release()
+
+        panel = StockCardsCanvas(
+            body, watchlist=True,
+            on_click=on_click,
+            on_right_click=on_right_click,
+            on_valuation=self._on_open_valuation)
+
+        def do_search():
+            q = q_var.get().strip()
+            if not q:
+                return
+            status.config(text="검색 중...", fg=COL_SECONDARY)
+            dlg.update_idletasks()
+            # 6자리 코드 직접 입력은 단건 처리
+            if q.isdigit() and len(q) == 6:
+                stocks = [{
+                    "ticker": q, "name": _fetch_stock_name(q) or q,
+                    "shares": 0, "avg_price": 0, "invested": 0,
+                    "buy_date": "", "market": "KOSPI", "account": "검색",
+                }]
+            else:
+                stocks = self._search_stocks(q)
+            if not stocks:
+                panel.render([], {}, self.peaks, self.config,
+                              self._build_caches(fade=False))
+                status.config(text="검색 결과 없음", fg=COL_PILL_DANGER)
+                return
+            # 가격 fetch
+            krx = [s["ticker"] for s in stocks]
+            try:
+                prices = fetch_toss_prices_batch(krx) if krx else {}
+            except Exception:
+                prices = {}
+            panel.render(stocks, prices, self.peaks, self.config,
+                          self._build_caches(fade=False))
+            status.config(text=f"{len(stocks)}건 — 우클릭으로 보유/관심 추가",
+                            fg=COL_SECONDARY)
+
+        tk.Button(top, text="🔍 검색", command=do_search,
+                   font=_font(11)).pack(side="left")
+
+        def _enter(_e=None):
+            do_search()
+            return "break"
+
+        # macOS 한글 IME 가 Enter 를 확정 키로 가로채는 경우가 있어
+        # KeyPress + KeyRelease + KP_Enter 까지 다중 바인딩 (entry / dlg 양쪽)
+        for seq in ("<Return>", "<KP_Enter>",
+                     "<KeyPress-Return>", "<KeyRelease-Return>"):
+            entry.bind(seq, _enter)
+            dlg.bind(seq, _enter)
         dlg.bind("<Escape>", lambda e: dlg.destroy())
-        self.root.wait_window(dlg)
-        if not result.get("ok"):
-            return
-        code = result["code"]
-        name = _fetch_stock_name(code) or code
+        entry.focus_set()
+
+    def _build_caches(self, fade=False):
+        """카드 렌더용 caches dict 생성 (검색 다이얼로그 등 외부에서 재사용)."""
+        try:
+            from zoneinfo import ZoneInfo
+            today_kst = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d")
+        except Exception:
+            today_kst = datetime.now().strftime("%Y-%m-%d")
+        return {
+            "investor": self.investor_cache,
+            "warning": self.warning_cache,
+            "sector": self.sector_cache,
+            "consensus": self.consensus_cache,
+            "sell_fee_pct": self.config.get("sell_fee_pct", 0.2),
+            "today_kst": today_kst,
+            "fade_sleeping": bool(fade),
+        }
+
+    def _add_to_group(self, ticker, group, parent=None):
+        """ticker 를 user 그룹 group 에 추가 (중복 검사)."""
+        from tkinter import messagebox
+        owner = parent or self.root
+        if group in self.RESERVED_ACCOUNTS:
+            messagebox.showerror("이름 오류",
+                f"'{group}' 은 시스템 예약 그룹", parent=owner); return
+        existing = [s for s in self.holdings_data.get("holdings", [])
+                     if s["ticker"] == ticker and s.get("account") == group]
+        if existing:
+            messagebox.showwarning("중복",
+                f"이미 '{group}' 그룹에 있음", parent=owner); return
+        name = _fetch_stock_name(ticker) or ticker
         self.holdings_data.setdefault("holdings", []).append({
-            "ticker": code, "name": name, "shares": 0, "avg_price": 0,
-            "invested": 0, "buy_date": "", "market": "KOSPI", "account": "관심",
+            "ticker": ticker, "name": name, "shares": 0, "avg_price": 0,
+            "invested": 0, "buy_date": "", "market": "KOSPI",
+            "account": group,
         })
+        if group not in self.user_groups:
+            self.user_groups.append(group)
+            self.holdings_data["groups"] = list(self.user_groups)
+        save_json(HOLDINGS_PATH, self.holdings_data)
+        self._reload_data()
+        messagebox.showinfo("추가 완료",
+            f"'{group}' 에 {name} ({ticker}) 추가됨", parent=owner)
+
+    def _add_to_new_group(self, ticker, parent=None):
+        from tkinter import simpledialog, messagebox
+        owner = parent or self.root
+        name = simpledialog.askstring("새 그룹",
+            "새 그룹 이름:", parent=owner)
+        if not name:
+            return
+        name = name.strip()
+        if not name:
+            return
+        if name in self.RESERVED_ACCOUNTS:
+            messagebox.showerror("이름 오류",
+                f"'{name}' 은 시스템 예약 이름", parent=owner); return
+        self._add_to_group(ticker, name, parent=owner)
+
+    def _move_to_group(self, ticker, src, dst, parent=None):
+        """ticker 를 사용자 그룹 src 에서 dst 로 이동.
+        dst 에 같은 ticker 가 이미 있으면 src 에서만 제거(중복 머지)."""
+        from tkinter import messagebox
+        owner = parent or self.root
+        if not dst or dst == src:
+            return
+        if dst in self.RESERVED_ACCOUNTS:
+            messagebox.showerror("이름 오류",
+                f"'{dst}' 은 시스템 예약 그룹", parent=owner); return
+        holdings = self.holdings_data.get("holdings", [])
+        src_stock = next((s for s in holdings
+                           if s["ticker"] == ticker
+                           and s.get("account") == src), None)
+        if not src_stock:
+            return
+        dst_existing = any(s["ticker"] == ticker and s.get("account") == dst
+                            for s in holdings)
+        if dst_existing:
+            self.holdings_data["holdings"] = [
+                s for s in holdings
+                if not (s["ticker"] == ticker and s.get("account") == src)
+            ]
+        else:
+            src_stock["account"] = dst
+            if dst not in self.user_groups:
+                self.user_groups.append(dst)
+                self.holdings_data["groups"] = list(self.user_groups)
         save_json(HOLDINGS_PATH, self.holdings_data)
         self._reload_data()
 
-    def _prompt_delete_watchlist(self):
-        from tkinter import messagebox
-        watches = [s for s in self.holdings_data.get("holdings", [])
-                    if s.get("account") in ("관심", "관심ETF")]
-        if not watches:
-            messagebox.showinfo("관심 목록", "관심 주식/ETF 가 없습니다.", parent=self.root); return
-        menu = tk.Menu(self.root, tearoff=0)
-        for s in watches:
-            t = s["ticker"]
-            icon = "📊" if s.get("account") == "관심ETF" else "⭐"
-            menu.add_command(label=f"{icon} {s.get('name', t)} ({t})",
-                              command=lambda t=t: self._delete_watchlist(t))
-        x = self.root.winfo_pointerx(); y = self.root.winfo_pointery()
-        try:
-            menu.tk_popup(x, y)
-        finally:
-            menu.grab_release()
+    def _move_to_new_group(self, ticker, src, parent=None):
+        from tkinter import simpledialog, messagebox
+        owner = parent or self.root
+        name = simpledialog.askstring("새 그룹",
+            "새 그룹 이름:", parent=owner)
+        if not name:
+            return
+        name = name.strip()
+        if not name or name == src:
+            return
+        if name in self.RESERVED_ACCOUNTS:
+            messagebox.showerror("이름 오류",
+                f"'{name}' 은 시스템 예약 이름", parent=owner); return
+        self._move_to_group(ticker, src, name, parent=owner)
 
-    def _delete_watchlist(self, ticker):
+    def _delete_watchlist(self, ticker, account):
         from tkinter import messagebox
         stock = next((s for s in self.holdings_data.get("holdings", [])
                        if s["ticker"] == ticker
-                       and s.get("account") in ("관심", "관심ETF")), None)
+                       and s.get("account") == account), None)
         if not stock:
             return
         if not messagebox.askyesno("관심 삭제",
-                f"{stock.get('name', ticker)} ({ticker}) 를 제거할까요?",
+                f"[{account}] {stock.get('name', ticker)} ({ticker}) 를 제거할까요?",
                 parent=self.root):
             return
         self.holdings_data["holdings"] = [
             s for s in self.holdings_data.get("holdings", [])
-            if not (s["ticker"] == ticker
-                     and s.get("account") in ("관심", "관심ETF"))
+            if not (s["ticker"] == ticker and s.get("account") == account)
         ]
         save_json(HOLDINGS_PATH, self.holdings_data)
         self._reload_data()
@@ -2121,9 +2858,11 @@ class PortfolioWindowV2:
     def _refresh_caches_async(self):
         import time as _t
         now = _t.time()
-        # 보유 + 퇴직연금 + 관심 + ETF 모두 가격 fetch 대상
+        # 보유 + 퇴직연금 + 모든 사용자 그룹 + 관심ETF — 모두 가격 fetch 대상
+        group_stocks = [s for g in self.user_groups
+                          for s in self.group_stocks.get(g, [])]
         all_stocks = (self.holdings + self.pension
-                       + self.watchlist + self.etf_holdings)
+                       + group_stocks + self.etf_holdings)
         krx = self._krx_tickers(all_stocks)
         prices = fetch_toss_prices_batch(krx) if krx else {}
 
@@ -2237,9 +2976,12 @@ class PortfolioWindowV2:
         # KST 오늘 날짜 — 종목별 trade_date 비교용
         try:
             from zoneinfo import ZoneInfo
-            today_kst = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d")
+            now_kst = datetime.now(ZoneInfo("Asia/Seoul"))
+            today_kst = now_kst.strftime("%Y-%m-%d")
+            show_prev = now_kst.hour < 8
         except Exception:
             today_kst = datetime.now().strftime("%Y-%m-%d")
+            show_prev = False
         caches = {
             "investor": self.investor_cache,
             "warning": self.warning_cache,
@@ -2255,8 +2997,10 @@ class PortfolioWindowV2:
                 pd = self.last_prices.get(s["ticker"]) or {}
                 cur_price = pd.get("price", 0)
                 base_price = pd.get("base", 0)
-                # 휴면(오늘 체결 없음) — base 를 cur 로 맞춰 어제대비 합계 기여 0
-                if today_kst and pd.get("trade_date", "") != today_kst:
+                # 휴면(오늘 체결 없음) — base 를 cur 로 맞춰 어제대비 합계 기여 0.
+                # 단, 자정 ~ 프리마켓(08:00 KST) 전엔 어제 변동량을 그대로 표시.
+                if (today_kst and pd.get("trade_date", "") != today_kst
+                        and not show_prev):
                     base_price = cur_price
                 shares = s.get("shares", 0)
                 inv += s.get("avg_price", 0) * shares
@@ -2281,10 +3025,13 @@ class PortfolioWindowV2:
                 ],
                 self.last_prices, self.peaks, self.config, caches,
             )
-        elif self.current_tab == self.TAB_WATCH:
-            self.watch_panel.render(
-                self.watchlist, self.last_prices, self.peaks, self.config, caches,
-            )
+        elif self.current_tab.startswith(self.TAB_GROUP_PREFIX):
+            group = self.current_tab[len(self.TAB_GROUP_PREFIX):]
+            panel = self._group_panels.get(self.current_tab)
+            stocks = self.group_stocks.get(group, [])
+            if panel:
+                panel.render(stocks, self.last_prices, self.peaks,
+                              self.config, caches)
         self.dirty[self.current_tab] = False
 
     def refresh(self):

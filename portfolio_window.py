@@ -323,16 +323,37 @@ def fetch_us_indices_with_futures() -> list:
         return v is not None and not math.isnan(float(v)) and float(v) != 0
 
     def _fast_quote(symbol):
-        """현재가 + 전일 종가 조회.
+        """현재가 + 기준 종가 조회.
+
+        시장 상태별 분기:
+        - PRE  (프리마켓 활성)  → 현재가=preMarketPrice,  기준=regularMarketPrice
+        - POST (애프터마켓 활성) → 현재가=postMarketPrice, 기준=regularMarketPrice
+        - REGULAR/CLOSED        → 현재가=regularMarketPrice, 기준=regularMarketPreviousClose
+
+        토스/네이버와 동일한 표시 (장 외 시간엔 연장거래 가격 우선).
         info.regularMarketPreviousClose 가 Yahoo 웹과 일치하지만,
-        일부 선물(SOX=F 등)에서는 last==prev 로 잘못 반환 → fast_info 폴백 우선 사용.
+        일부 선물(SOX=F 등)에서는 last==prev 로 잘못 반환 → fast_info 폴백.
         """
         tk = yf.Ticker(symbol)
         info_last = info_prev = None
+        market_state = ""
         try:
             info = tk.info
-            info_last = info.get("regularMarketPrice")
-            info_prev = info.get("regularMarketPreviousClose")
+            market_state = (info.get("marketState") or "").upper()
+            pre_p = info.get("preMarketPrice")
+            post_p = info.get("postMarketPrice")
+            reg_p = info.get("regularMarketPrice")
+            reg_prev = info.get("regularMarketPreviousClose")
+            if market_state == "PRE" and _is_valid(pre_p) and _is_valid(reg_p):
+                # 프리마켓: 현재가=프리마켓, 기준=직전 정규장 종가
+                info_last, info_prev = pre_p, reg_p
+            elif market_state == "POST" and _is_valid(post_p) and _is_valid(reg_p):
+                # 애프터마켓: 현재가=포스트마켓, 기준=오늘 정규장 종가
+                info_last, info_prev = post_p, reg_p
+            else:
+                # 정규장 또는 완전 휴장
+                info_last = reg_p
+                info_prev = reg_prev
         except Exception:
             pass
         fi_last = fi_prev = None
@@ -582,14 +603,17 @@ def fetch_toss_prices_batch(tickers: list) -> dict:
             close = item.get("close")
             volume = item.get("volume", 0)
             base = item.get("base", 0)  # 전일 종가
-            # 마지막 체결 시각 (KST 날짜) — 오늘 거래 여부 판정용
+            # 마지막 체결 시각 — 오늘 거래 여부 + 10분 경과 판정용
             trade_date = ""
+            trade_dt_kst = ""  # ISO 문자열 (KST timezone-aware)
             raw_dt = item.get("tradeDateTime", "")
             if raw_dt:
                 try:
                     from zoneinfo import ZoneInfo
                     dt_utc = datetime.fromisoformat(raw_dt.replace("Z", "+00:00"))
-                    trade_date = dt_utc.astimezone(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d")
+                    kst_dt = dt_utc.astimezone(ZoneInfo("Asia/Seoul"))
+                    trade_date = kst_dt.strftime("%Y-%m-%d")
+                    trade_dt_kst = kst_dt.isoformat()
                 except Exception:
                     pass
             if code and close is not None:
@@ -598,6 +622,7 @@ def fetch_toss_prices_batch(tickers: list) -> dict:
                     "volume": int(volume),
                     "base": int(base),
                     "trade_date": trade_date,
+                    "trade_dt": trade_dt_kst,
                     "open": int(item.get("open") or 0),
                 }
         return result
