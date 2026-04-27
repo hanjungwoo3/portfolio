@@ -163,7 +163,9 @@ def fetch_investor_flow(ticker: str) -> dict | None:
     """
     토스증권 공개 API에서 최근 일자 개인/외국인/기관 순매수 조회
     토스 앱과 완전히 동일한 숫자 (외국인 = 순수 외국인, 기타외국인은 개인에 포함)
-    항상 body[0] (가장 최신 날짜) 값 반환 — 0이어도 어제로 폴백하지 않음
+
+    8시(KST) 이전 — body[0] 이 전부 0 이면 body[1] 직전 영업일로 폴백
+    8시(KST) 이후 — body[0] 그대로 (오늘 데이터, 0이어도 reset 의미)
     """
     try:
         url = (
@@ -179,7 +181,25 @@ def fetch_investor_flow(ticker: str) -> dict | None:
         body = data.get("result", {}).get("body", [])
         if not body:
             return None
+        # 8시 이전 폴백 — 새벽엔 어제 데이터, 8시 이후엔 오늘(reset) 사용
+        net_keys = (
+            "netIndividualsBuyVolume", "netForeignerBuyVolume",
+            "netInstitutionBuyVolume", "netPensionFundBuyVolume",
+            "netFinancialInvestmentBuyVolume", "netTrustBuyVolume",
+            "netPrivateEquityFundBuyVolume", "netInsuranceBuyVolume",
+            "netBankBuyVolume", "netOtherFinancialInstitutionsBuyVolume",
+            "netOtherCorporationBuyVolume",
+        )
+        def _all_zero(b):
+            return all((b.get(k) or 0) == 0 for k in net_keys)
+        try:
+            from zoneinfo import ZoneInfo
+            kst_hour = datetime.now(ZoneInfo("Asia/Seoul")).hour
+        except Exception:
+            kst_hour = datetime.now().hour
         item = body[0]
+        if kst_hour < 8 and _all_zero(item) and len(body) >= 2:
+            item = body[1]
         return {
             "date": item.get("baseDate", ""),
             "개인": int(item.get("netIndividualsBuyVolume", 0)),
@@ -271,11 +291,13 @@ def fetch_us_indices_with_futures() -> list:
         ("LMT", "Lockheed Martin", "방산 대장 — 글로벌 방산 경기", None, "T1", "방산", "direct"),
         # 🚢 중공업/조선 (HJ중공업)
         ("CAT", "Caterpillar", "중장비 — 경기 사이클 선행", None, "T1", "중공업", "direct"),
+        ("HG=F", "구리", "Dr. Copper — 글로벌 경기 선행지표", None, "T1", "중공업", "direct"),
         # 🏢 리츠 (삼성FN리츠)
         ("^TNX", "미국 10Y", "10년물 국채금리 — 리츠·성장주 할인율", "ZN=F", "T1", "리츠", "inverse"),
         ("VNQ", "Vanguard REIT", "미국 리츠 ETF — 부동산 투심", None, "T1", "리츠", "direct"),
         # ⚡ 에너지 (흥구석유)
         ("CL=F", "WTI 원유", "국제 유가 — 정유·에너지 직결", None, "T1", "에너지", "neutral"),
+        ("NG=F", "천연가스", "헨리허브 — LNG·발전·난방", None, "T1", "에너지", "neutral"),
 
         # --- 👀 Tier 2: 관심 섹터 (연하게) ---
         # 🚗 자동차
@@ -289,7 +311,10 @@ def fetch_us_indices_with_futures() -> list:
         ("META", "Meta", "플랫폼 대장 — 광고·AI", None, "T2", "플랫폼", "direct"),
         # 🧬 바이오
         ("XBI", "SPDR Biotech", "미국 바이오 ETF", None, "T2", "바이오", "direct"),
+        # 🤖 로봇 (로보티즈)
+        ("BOTZ", "BOTZ", "Global X 로봇·AI ETF — 로봇 섹터 대표", None, "T2", "로봇", "direct"),
         # 🇰🇷 한국지수 (컨텍스트용)
+        ("^N225", "닛케이 225", "일본 대형주 — 아시아 센티멘트", "NKD=F", "T2", "한국지수", "direct"),
         ("^KS200", "KOSPI 200", "코스피 200 지수", None, "T2", "한국지수", "direct"),
         ("^KQ11", "KOSDAQ", "코스닥 지수", None, "T2", "한국지수", "direct"),
     ]
@@ -299,29 +324,35 @@ def fetch_us_indices_with_futures() -> list:
 
     def _fast_quote(symbol):
         """현재가 + 전일 종가 조회.
-        선물(CL=F 등) 은 fast_info.regular_market_previous_close 가 Yahoo 웹과 어긋나므로
-        info.regularMarketPreviousClose 를 우선 사용.
+        info.regularMarketPreviousClose 가 Yahoo 웹과 일치하지만,
+        일부 선물(SOX=F 등)에서는 last==prev 로 잘못 반환 → fast_info 폴백 우선 사용.
         """
         tk = yf.Ticker(symbol)
-        # 1) info 우선 (Yahoo 웹과 일치)
+        info_last = info_prev = None
         try:
             info = tk.info
-            last = info.get("regularMarketPrice")
-            prev = info.get("regularMarketPreviousClose")
-            if _is_valid(last) and _is_valid(prev):
-                return float(last), float(prev)
+            info_last = info.get("regularMarketPrice")
+            info_prev = info.get("regularMarketPreviousClose")
         except Exception:
             pass
-        # 2) fast_info 폴백
+        fi_last = fi_prev = None
         try:
             fi = tk.fast_info
-            last = fi.last_price
-            prev = fi.regular_market_previous_close
-            if _is_valid(last) and _is_valid(prev):
-                return float(last), float(prev)
+            fi_last = fi.last_price
+            fi_prev = fi.regular_market_previous_close
         except Exception:
             pass
-        # 3) history 폴백
+        # 1) info 가 유효 AND last != prev (정상값) → info 사용
+        if (_is_valid(info_last) and _is_valid(info_prev)
+                and float(info_last) != float(info_prev)):
+            return float(info_last), float(info_prev)
+        # 2) fast_info 폴백 (info 에서 last==prev 로 의심되는 경우)
+        if _is_valid(fi_last) and _is_valid(fi_prev):
+            return float(fi_last), float(fi_prev)
+        # 3) info 에 last==prev 라도 마지막 폴백
+        if _is_valid(info_last) and _is_valid(info_prev):
+            return float(info_last), float(info_prev)
+        # 4) history 폴백
         try:
             h = tk.history(period="5d", auto_adjust=False)
             if not h.empty and len(h) >= 2:

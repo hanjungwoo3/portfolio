@@ -7,6 +7,15 @@ __pycache__/
 data/holdings.json
 data/peaks.json
 data/alerts/*.json
+data/fundamentals_cache.json
+data/launcher.err
+data/launcher.log
+data/window.log
+data/mobile_*.png
+
+# Desktop 앱 빌드 산출물
+Portfolio.app/
+docs/
 
 # Mobile 앱 — 민감/캐시/빌드 산출물
 mobile/holdings.json

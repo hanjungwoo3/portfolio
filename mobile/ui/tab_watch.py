@@ -171,13 +171,15 @@ class TabWatch(BoxLayout):
             print(f"[watch-session] {e}")
             return "CLOSED"
 
-    def _is_sleeping_stock(self, ticker: str, volume: int) -> bool:
-        phase = self._session_phase()
-        if phase == "REGULAR":
-            return False
-        if phase == "EXTENDED":
-            return not (nxt_support_cache.get(ticker) and volume > 0)
-        return True
+    def _is_sleeping_stock(self, ticker: str, volume: int,
+                             trade_date: str = "") -> bool:
+        """오늘(KST) 체결 있으면 활성 / 없으면 휴면"""
+        try:
+            from zoneinfo import ZoneInfo
+            today_kst = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d")
+        except Exception:
+            today_kst = datetime.now().strftime("%Y-%m-%d")
+        return trade_date != today_kst
 
     def _fetch_and_render(self):
         watches = [s for s in self.holdings_data.get("holdings", [])
@@ -223,12 +225,18 @@ class TabWatch(BoxLayout):
         price = price_info.get("price", 0)
         base = price_info.get("base", 0)
         volume = price_info.get("volume", 0)
+        trade_date = price_info.get("trade_date", "")
         diff = price - base if (price and base) else 0
         pct = (diff / base * 100) if base else 0
         diff_color = sign_color(diff)
         warn_text = warning_cache.get(t) or ""
         sector = sector_cache.get(t) or ""
-        is_sleeping = self._is_sleeping_stock(t, volume)
+        is_sleeping = self._is_sleeping_stock(t, volume, trade_date)
+        # 오늘 체결 없으면 어제보다 0 (휴면 — cur_price=어제 종가, base=그제 종가라 부정확)
+        if is_sleeping:
+            diff = 0
+            pct = 0
+            diff_color = sign_color(0)
 
         from ui import app_state
         fade_on = app_state.get("fade_sleeping")

@@ -41,6 +41,24 @@ from portfolio_window import (  # noqa: E402
     FUT_FULL_NAME, resolve_us_indicator_url,
     is_market_open, market_of_symbol,
 )
+import fundamentals  # noqa: E402
+
+
+def _fmt_shares(n) -> str:
+    """주식수 한글 단위 축약. 예) 1,151,579,977 → '11.5억주'."""
+    if n is None or n == "":
+        return "—"
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
+        return "—"
+    sign = "-" if n < 0 else ""
+    n = abs(n)
+    if n >= 100_000_000:
+        return f"{sign}{n / 100_000_000:,.1f}억주"
+    if n >= 10_000:
+        return f"{sign}{n / 10_000:,.1f}만주"
+    return f"{sign}{n:,}주"
 
 
 def _fetch_stock_name(code: str) -> str:
@@ -101,7 +119,7 @@ def _font(size=12, weight="normal"):
 # ─────────────────────────── 카드 레이아웃 상수 (Canvas 좌표) ───────────────────────────
 CARD_PAD_X = 12
 CARD_PAD_Y = 10
-CARD_HEIGHT = 142   # 카드 1장 높이 (좌측 5줄 + 우측 6줄 모두 수용)
+CARD_HEIGHT = 160   # 카드 1장 높이 (좌측 6줄: pill/가격/원금+피크/어제보다/전체수익/목표)
 CARD_GAP = 6
 LEFT_RATIO = 0.55   # 좌측 55% (우측 그리드 여유 확보)
 LINE_HEIGHT = 22
@@ -209,11 +227,13 @@ class StockCardsCanvas:
     # 큰 볼드 폰트로 한 단계 더 강조 (가장 중요한 두 항목)
     FONT_BUMP_KEYS = ("외국인", "기관")
 
-    def __init__(self, parent, watchlist=False, on_click=None, on_right_click=None):
+    def __init__(self, parent, watchlist=False, on_click=None, on_right_click=None,
+                 on_valuation=None):
         self.parent = parent
         self.watchlist = watchlist
         self.on_click = on_click or (lambda t: None)
         self.on_right_click = on_right_click or (lambda t, e: None)
+        self.on_valuation = on_valuation or (lambda t, name: None)
 
         self.frame = tk.Frame(parent, bg=COL_BG_APP)
         self.frame.pack(fill="both", expand=True)
@@ -235,6 +255,9 @@ class StockCardsCanvas:
 
         self.cards = {}    # ticker -> {item id 들}
         self.order = []    # 현재 그려진 순서
+        # 직전 틱 대비 화살표 (▲/▵ 상승, ▼/▽ 하락)
+        self._last_tick_prices = {}  # ticker -> price
+        self._last_tick_dirs = {}    # ticker -> "up"/"down"/None
         # grouped 모드 상태 (render_grouped 사용 시) — _reflow 가 사용
         self._grouped_pos_map = None       # ticker -> idx
         self._grouped_y_offset_map = None  # ticker -> y 픽셀 오프셋 (그룹 갭)
@@ -288,7 +311,8 @@ class StockCardsCanvas:
                                            tags=(f"card:{ticker}",))
         pill_bg_id = c.create_rectangle(0, 0, 0, 0, fill=COL_PILL_DEFAULT,
                                           outline="",
-                                          tags=(f"card:{ticker}",))
+                                          tags=(f"card:{ticker}",
+                                                  f"pill:{ticker}"))
         badge_bg_id = c.create_rectangle(0, 0, 0, 0, fill="", outline="",
                                             tags=(f"card:{ticker}",))
 
@@ -302,19 +326,25 @@ class StockCardsCanvas:
         peak_bg_id = c.create_rectangle(0, 0, 0, 0, fill="", outline="",
                                           tags=(f"card:{ticker}",))
 
+        # pill_text — pill:{ticker} 태그도 함께 부여 (Toss 클릭 영역 제한용)
+        pill_text_id = c.create_text(0, 0, text="", font=_font(13, "bold"),
+                                       fill="#000", anchor="nw",
+                                       tags=(f"card:{ticker}", f"pill:{ticker}"))
+
         ids = {
             "bg": bg_id, "right_bg": right_bg_id,
-            "pill_bg": pill_bg_id, "pill_text": t(_font(13, "bold"), "#000"),
+            "pill_bg": pill_bg_id, "pill_text": pill_text_id,
             "badge_bg": badge_bg_id, "badge_text": t(_font(10, "bold"), "#fff", "center"),
             "sector_text": t(_font(10), COL_MUTED),
 
             "price_text": t(_font(17, "bold"), COL_PRIMARY),
             "vol_text": t(_font(10), COL_MUTED),
+            "cost_text": t(_font(11), COL_MUTED),
             "peak_bg": peak_bg_id,
-            "peak_text": t(_font(10, "bold"), COL_MUTED),
+            "peak_text": t(_font(11, "bold"), COL_MUTED),
 
             "day_label": t(_font(11), COL_SECONDARY),
-            "day_value": t(_font(11, "bold"), COL_PRIMARY),
+            "day_value": t(_font(14, "bold"), COL_PRIMARY),
 
             "pnl_label": t(_font(11), COL_SECONDARY),
             "pnl_value": t(_font(11, "bold"), COL_PRIMARY),
@@ -341,13 +371,40 @@ class StockCardsCanvas:
                 ids[f"flow_label_{key}"] = t(_font(10), COL_SECONDARY)
                 ids[f"flow_value_{key}"] = t(_font(10), COL_MUTED, "ne")
 
-        # 카드 영역에 클릭 이벤트
-        c.tag_bind(f"card:{ticker}", "<Button-1>",
+        # 클릭 이벤트
+        # - 좌클릭(Toss 열기): 종목명 pill 영역에만 한정
+        # - 우클릭(컨텍스트 메뉴): 카드 전체
+        c.tag_bind(f"pill:{ticker}", "<Button-1>",
                     lambda e, t=ticker: self.on_click(t))
+        c.tag_bind(f"pill:{ticker}", "<Enter>",
+                    lambda e: c.configure(cursor="hand2"))
+        c.tag_bind(f"pill:{ticker}", "<Leave>",
+                    lambda e: c.configure(cursor=""))
         c.tag_bind(f"card:{ticker}", "<Button-2>",
                     lambda e, t=ticker: self.on_right_click(t, e))
         c.tag_bind(f"card:{ticker}", "<Button-3>",
                     lambda e, t=ticker: self.on_right_click(t, e))
+
+        # 기업가치 버튼 — 한국주식(6자리 숫자)에만 표시.
+        # 시각 노이즈 최소화: 컬러 이모지 대신 monochrome 글리프 + 옅은 회색.
+        # tk.Label + create_window 조합으로 카드 tag_bind 와 격리.
+        if ticker.isdigit() and len(ticker) == 6:
+            btn = tk.Label(c, text="ⓘ", font=_font(10), cursor="hand2",
+                            bg=COL_BG_CARD, fg="#c5cdd5",
+                            padx=2, pady=0)
+            # 호버 시 살짝 진해져서 클릭 가능 표시
+            btn.bind("<Enter>", lambda e, w=btn: w.config(fg=COL_SECONDARY))
+            btn.bind("<Leave>", lambda e, w=btn: w.config(fg="#c5cdd5"))
+            btn.bind("<Button-1>",
+                      lambda e, t=ticker, w=btn:
+                        self.on_valuation(t, getattr(w, "_card_name", "")))
+            btn_id = c.create_window(0, 0, window=btn, anchor="ne",
+                                       tags=(f"card:{ticker}",))
+            ids["val_btn"] = btn
+            ids["val_btn_id"] = btn_id
+        else:
+            ids["val_btn"] = None
+            ids["val_btn_id"] = None
 
         return ids
 
@@ -387,23 +444,31 @@ class StockCardsCanvas:
         c.coords(ids["sector_text"], lx, ly + 11)
         c.itemconfig(ids["sector_text"], anchor="w")
 
-        # Line 2: price + vol + peak
+        # 기업가치 버튼 — 좌측 패널 우상단 (split_x 직전)
+        if ids.get("val_btn_id") is not None:
+            c.coords(ids["val_btn_id"], split_x - 6, ly - 2)
+
+        # Line 2: price + vol
         ly2 = ly + LINE_HEIGHT + 4
         c.coords(ids["price_text"], lx, ly2)
         c.coords(ids["vol_text"], lx + 100, ly2 + 6)
-        c.coords(ids["peak_text"], lx + 180, ly2 + 6)  # vol_text 우측, _update 에서 동적 재배치
 
-        # Line 3: 어제보다
-        ly3 = ly2 + LINE_HEIGHT + 6
+        # Line 3: 원금 + 피크 (한 줄)
+        ly_cost = ly2 + LINE_HEIGHT + 6
+        c.coords(ids["cost_text"], lx, ly_cost)
+        c.coords(ids["peak_text"], lx + 140, ly_cost)  # cost_text 우측, _update 에서 동적 재배치
+
+        # Line 4: 어제보다
+        ly3 = ly_cost + LINE_HEIGHT
         c.coords(ids["day_label"], lx, ly3)
         c.coords(ids["day_value"], lx + 60, ly3)
 
-        # Line 4: 전체수익 (보유만, 관심에선 빈 텍스트)
+        # Line 5: 전체수익 (보유만, 관심에선 빈 텍스트)
         ly4 = ly3 + LINE_HEIGHT
         c.coords(ids["pnl_label"], lx, ly4)
         c.coords(ids["pnl_value"], lx + 60, ly4)
 
-        # Line 5: 목표 — target_gap 위치는 update 단계에서 target_value bbox 측정 후 동적 배치
+        # Line 6: 목표 — target_gap 위치는 update 단계에서 target_value bbox 측정 후 동적 배치
         ly5 = ly4 + LINE_HEIGHT
         c.coords(ids["target_label"], lx, ly5)
         c.coords(ids["target_value"], lx + 36, ly5)
@@ -452,6 +517,12 @@ class StockCardsCanvas:
 
         day_diff = cur_price - base_price if base_price else 0
         day_pct = (day_diff / base_price * 100) if base_price else 0
+        # 오늘 체결 없으면 어제보다 0 (cur_price 가 어제 종가 그대로라 day_diff 가 잘못 잡힘)
+        _today_kst = caches.get("today_kst", "")
+        _trade_date = price_data.get("trade_date", "") if price_data else ""
+        if _today_kst and _trade_date != _today_kst:
+            day_diff = 0
+            day_pct = 0
 
         warn_text = caches["warning"].get(ticker) or ""
         sector = caches["sector"].get(ticker) or ""
@@ -472,7 +543,9 @@ class StockCardsCanvas:
                          and abs(from_peak_pct) >= 0.01)
 
         # 장마감 페이드 (KR 마감 + 토글 ON 일 때만)
-        kr_closed = caches.get("kr_closed", False)
+        # 거래 활성 여부 — 오늘 체결이 있으면 활성. trade_date 가 오늘이 아니면 휴장
+        trade_date = price_data.get("trade_date", "") if price_data else ""
+        kr_closed = (trade_date != caches.get("today_kst", ""))
         fade = caches.get("fade_sleeping", False) and kr_closed
         def _fc(color, ratio=0.5):
             return _fade_hex(color, ratio) if fade else color
@@ -485,6 +558,14 @@ class StockCardsCanvas:
         else:
             card_bg = COL_BG_CARD
         c.itemconfig(ids["bg"], fill=_fc(card_bg))
+
+        # 기업가치 버튼 — 카드 배경 색에 맞춰 갱신 + 종목명 보존
+        if ids.get("val_btn") is not None:
+            try:
+                ids["val_btn"].config(bg=_fc(card_bg))
+                ids["val_btn"]._card_name = name  # 다이얼로그 헤더에 사용
+            except tk.TclError:
+                pass
 
         # ─── pill
         zz = "💤 " if kr_closed else ""
@@ -530,43 +611,62 @@ class StockCardsCanvas:
                      fill=_fc(COL_MUTED))
 
         # ─── price + vol + peak
+        # 직전 틱 대비 화살표 — 첫 전환은 속빈(▵/▽), 연속은 속찬(▲/▼)
+        prev_tick = self._last_tick_prices.get(ticker)
+        prev_dir = self._last_tick_dirs.get(ticker)
+        if cur_price and prev_tick is not None and cur_price > prev_tick:
+            new_dir = "up"
+            arrow = "▲ " if prev_dir == "up" else "▵ "
+        elif cur_price and prev_tick is not None and cur_price < prev_tick:
+            new_dir = "down"
+            arrow = "▼ " if prev_dir == "down" else "▽ "
+        else:
+            new_dir = prev_dir
+            arrow = ""
+        if cur_price:
+            self._last_tick_prices[ticker] = cur_price
+            self._last_tick_dirs[ticker] = new_dir
         if cur_price:
             price_fg = sign_color(day_diff) if day_diff else COL_PRIMARY
             c.itemconfig(ids["price_text"],
-                          text=f"{int(cur_price):,}원",
+                          text=f"{arrow}{int(cur_price):,}원",
                           fill=_fc(price_fg))
         else:
             c.itemconfig(ids["price_text"], text="—", fill=_fc(COL_MUTED))
         bb = c.bbox(ids["price_text"])
         vx = bb[2] + 6 if bb else (c.coords(ids["price_text"])[0] + 100)
         py = c.coords(ids["price_text"])[1]
-        # 거래량
+        # 거래량 — 가격 옆
         c.coords(ids["vol_text"], vx, py + 4)
         vol_str = f"({format_volume(volume)})" if volume else ""
         c.itemconfig(ids["vol_text"], text=vol_str, fill=_fc(COL_MUTED))
-        # 피크: 현재가와 같으면 숨김, 피크 > 현재가면 빨강, 그 외(rare) 회색
-        # is_peak_drop(예: from_peak<=-9%) 발생 시 배경 강조 (종목명 pill 대신 여기에)
-        if (peak_price and cur_price
-                and int(peak_price) != int(cur_price)):
-            peak_str = f"{int(peak_price):,}원 ({from_peak_pct:+.2f}%)"
+
+        # ─── 매수 + 피크 (Line 3, 한 줄)
+        # 매수 = 1주 매수가 (avg_price). 관심종목엔 빈 텍스트
+        cost_str = f"매수 {int(avg):,}원" if avg else ""
+        c.itemconfig(ids["cost_text"], text=cost_str, fill=_fc(COL_MUTED))
+        cost_y = c.coords(ids["cost_text"])[1]
+        # 피크: peak > cur 일 때만 표시 (cur >= peak 면 새 고점이라 의미 없음)
+        # is_peak_drop 발생 시 배경 강조 (종목명 pill 대신 여기에)
+        if peak_price and cur_price and peak_price > cur_price:
+            peak_str = f"피크 {int(peak_price):,}원 ({from_peak_pct:+.2f}%)"
             if is_peak_drop:
-                # 피크가 대비 -10% 이상 (트레일링 스탑 알림) — 항상 진빨강 배경 + 흰 글자
                 peak_bg_fill = COL_PILL_PEAK_PROFIT
                 peak_color = "#ffffff"
             else:
                 peak_bg_fill = ""
-                peak_color = "#c0392b" if peak_price > cur_price else COL_MUTED
+                peak_color = "#c0392b"
         else:
             peak_str = ""
             peak_bg_fill = ""
             peak_color = COL_MUTED
-        # vol_text 우측에 동적 배치
-        if vol_str:
-            vb = c.bbox(ids["vol_text"])
-            px = vb[2] + 6 if vb else (vx + 80)
+        # cost_text 우측에 동적 배치
+        if cost_str:
+            cb = c.bbox(ids["cost_text"])
+            px = cb[2] + 12 if cb else (lx + 140)
         else:
-            px = vx
-        c.coords(ids["peak_text"], px, py + 4)
+            px = c.coords(ids["cost_text"])[0]  # cost 없으면 cost 자리에서 시작
+        c.coords(ids["peak_text"], px, cost_y)
         c.itemconfig(ids["peak_text"], text=peak_str, fill=_fc(peak_color))
         # peak_bg: 강조 시 peak_text bbox 둘러싸도록
         if peak_bg_fill and peak_str:
@@ -582,8 +682,13 @@ class StockCardsCanvas:
         # ─── 어제보다
         c.itemconfig(ids["day_label"], text="어제보다", fill=_fc(COL_SECONDARY))
         if day_diff:
-            c.itemconfig(ids["day_value"],
-                          text=f"{format_signed(int(day_diff))}  ({day_pct:+.2f}%)",
+            if shares:
+                total_day = int(day_diff * shares)
+                day_text = (f"{format_signed(int(day_diff))} / "
+                            f"{format_signed(total_day)}  ({day_pct:+.2f}%)")
+            else:
+                day_text = f"{format_signed(int(day_diff))}  ({day_pct:+.2f}%)"
+            c.itemconfig(ids["day_value"], text=day_text,
                           fill=_fc(sign_color(day_diff)))
         else:
             c.itemconfig(ids["day_value"], text="—", fill=_fc(COL_MUTED))
@@ -846,12 +951,16 @@ class StockCardsCanvas:
             y0, y1 = 4, 64
             c.create_rectangle(x0, y0, x1, y1, fill=COL_BG_CARD,
                                 outline=COL_BORDER, width=1)
+            # Line 1 — 좌: 투자원금 (회색) / 우: 보유 합계 (pnl 부호색)
             c.create_text(x0 + 14, y0 + 12,
-                           text=g.get("label", "합계"), anchor="w",
-                           font=_font(13, "bold"), fill=COL_PRIMARY)
+                           text=f"투자원금  {int(invested):,}원", anchor="w",
+                           font=_font(11), fill=COL_SECONDARY)
+            cur_color = sign_color(pnl) if pnl else COL_PRIMARY
             c.create_text(x1 - 14, y0 + 12,
-                           text=f"{int(current):,}원", anchor="e",
-                           font=_font(13, "bold"), fill=COL_PRIMARY)
+                           text=f"{g.get('label', '합계')}  {int(current):,}원",
+                           anchor="e",
+                           font=_font(13, "bold"), fill=cur_color)
+            # Line 2 — 전체수익
             c.create_text(x0 + 14, y0 + 32,
                            text="전체수익", anchor="w",
                            font=_font(11), fill=COL_SECONDARY)
@@ -859,13 +968,14 @@ class StockCardsCanvas:
                            text=f"{format_signed(int(pnl))} ({pnl_pct:+.2f}%)",
                            anchor="e", font=_font(11, "bold"),
                            fill=sign_color(pnl))
+            # Line 3 — 어제대비 (% 폰트 키움)
             c.create_text(x0 + 14, y0 + 50,
                            text="어제대비", anchor="w",
                            font=_font(11), fill=COL_SECONDARY)
             if day_diff:
                 c.create_text(x1 - 14, y0 + 50,
                                text=f"{format_signed(int(day_diff))} ({day_pct:+.2f}%)",
-                               anchor="e", font=_font(11, "bold"),
+                               anchor="e", font=_font(13, "bold"),
                                fill=sign_color(day_diff))
 
     def _render_total(self, invested, current, yesterday):
@@ -949,6 +1059,7 @@ class USIndicesV1Style:
         ("금융",     "💰 금융"),
         ("플랫폼",   "📱 플랫폼/AI"),
         ("바이오",   "🧬 바이오"),
+        ("로봇",     "🤖 로봇"),
         ("한국지수", "🇰🇷 한국지수"),
     ]
     ETFS_BY_SECTOR = {
@@ -962,6 +1073,7 @@ class USIndicesV1Style:
         "금융":     ["091170"],
         "플랫폼":   ["365040"],
         "바이오":   ["143860"],
+        "로봇":     ["445290"],
         "한국지수": ["122630", "229200"],
     }
 
@@ -1022,6 +1134,11 @@ class USIndicesV1Style:
         """부분 갱신 — 위젯을 destroy 없이 텍스트·색·bg만 itemconfig 로 갱신.
         보유종목 카드와 동일한 패턴이라 깜빡임 없음."""
         self._fade_sleeping = bool(fade_sleeping)
+        try:
+            from zoneinfo import ZoneInfo
+            self._today_kst = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d")
+        except Exception:
+            self._today_kst = datetime.now().strftime("%Y-%m-%d")
 
         if not indices:
             # 빈 데이터 — 전체 클리어 후 로딩 메시지
@@ -1197,13 +1314,18 @@ class USIndicesV1Style:
             bg = cells["bg"]
             indices = by_sector.get(sector_key, [])
             etf_tickers = self.ETFS_BY_SECTOR.get(sector_key, [])
-            # 현물지표
-            for i, idx in enumerate(indices):
+            # 현물지표 — cash 심볼이 =F (순수 선물) 이면 선물 컬럼으로 라우팅
+            ind_row = 0
+            for idx in indices:
+                sym = idx.get("symbol") or ""
+                if sym.endswith("=F"):
+                    continue
                 self._upsert_indicator_card(cells["ind_inner"], sector_key,
-                                              idx, bg, i)
-                if idx.get("symbol"):
-                    new_keys.add((sector_key, "indicator", idx["symbol"]))
-            # 선물
+                                              idx, bg, ind_row)
+                if sym:
+                    new_keys.add((sector_key, "indicator", sym))
+                ind_row += 1
+            # 선물 — (1) cash+fut 페어의 fut, (2) cash 자체가 =F 인 항목
             fut_row = 0
             for idx in indices:
                 fs = idx.get("fut_symbol") or ""
@@ -1213,6 +1335,14 @@ class USIndicesV1Style:
                 self._upsert_futures_card(cells["fut_inner"], sector_key,
                                             idx, bg, fut_row)
                 new_keys.add((sector_key, "futures", fs))
+                fut_row += 1
+            for idx in indices:
+                sym = idx.get("symbol") or ""
+                if not sym.endswith("=F"):
+                    continue
+                self._upsert_futures_only_card(cells["fut_inner"], sector_key,
+                                                 idx, bg, fut_row)
+                new_keys.add((sector_key, "futures", sym))
                 fut_row += 1
             # ETF
             for ti, t in enumerate(etf_tickers):
@@ -1371,6 +1501,25 @@ class USIndicesV1Style:
                             price_txt=price_txt, pct_value=fp,
                             url=url, fade=fade, bg_default=bg)
 
+    def _upsert_futures_only_card(self, parent_inner, sector_key, idx, bg, row_i):
+        """cash 슬롯이 =F (순수 선물 — 페어가 없는 항목) — 선물 컬럼에 표시."""
+        sym = idx.get("symbol") or ""
+        pct = idx.get("pct", 0)
+        price = idx.get("price", 0)
+        name = idx.get("name", sym)
+        note = idx.get("note", "")
+        closed = not is_market_open(market_of_symbol(sym))
+        zz = "💤" if closed else ""
+        name_disp = f"{zz}{name}"
+        price_txt = f"{price:,.2f}" if price else "-"
+        url = resolve_us_indicator_url(sym)
+        fade = bool(self._fade_sleeping) and closed
+        self._upsert_card(parent_inner=parent_inner,
+                            reg_key=(sector_key, "futures", sym),
+                            row_i=row_i, name_disp=name_disp, note=note,
+                            price_txt=price_txt, pct_value=pct,
+                            url=url, fade=fade, bg_default=bg)
+
     def _upsert_etf_card(self, parent_inner, sector_key, stock,
                            price_data, bg, row_i):
         price = price_data.get("price", 0) or 0
@@ -1380,7 +1529,9 @@ class USIndicesV1Style:
         t = stock["ticker"]
         url = f"https://tossinvest.com/stocks/A{t}"
         price_txt = f"{int(price):,}" if price else "-"
-        closed = not is_market_open("KR")
+        # 거래 활성 여부 — 오늘 체결 있으면 활성 (trade_date 가 오늘이 아니면 휴장)
+        trade_date = price_data.get("trade_date", "") or ""
+        closed = (trade_date != getattr(self, "_today_kst", ""))
         zz = "💤" if closed else ""
         name_disp = f"{zz}{stock.get('name', t)}"
         fade = bool(self._fade_sleeping) and closed
@@ -1398,7 +1549,7 @@ class PortfolioWindowV2:
     CONSENSUS_TTL = 3600
     SECTOR_TTL = 86400
     WARNING_TTL = 6 * 3600
-    US_TTL = 60
+    US_TTL = 20
 
     TAB_US = "us"
     TAB_HOLD = "hold"
@@ -1453,7 +1604,8 @@ class PortfolioWindowV2:
 
         try:
             from AppKit import NSApplication, NSApp
-            NSApplication.sharedApplication().setActivationPolicy_(1)
+            # 0 = Regular (Dock 표시 + 앱 스위처/Mission Control 포함)
+            NSApplication.sharedApplication().setActivationPolicy_(0)
             try:
                 NSApp.activateIgnoringOtherApps_(True)
             except Exception:
@@ -1557,7 +1709,8 @@ class PortfolioWindowV2:
         self.holdings_panel = StockCardsCanvas(
             hold_frame, watchlist=False,
             on_click=self._on_card_click,
-            on_right_click=self._on_card_right_click)
+            on_right_click=self._on_card_right_click,
+            on_valuation=self._on_open_valuation)
 
         # 관심
         watch_frame = tk.Frame(self.notebook, bg=COL_BG_APP)
@@ -1565,7 +1718,8 @@ class PortfolioWindowV2:
         self.watch_panel = StockCardsCanvas(
             watch_frame, watchlist=True,
             on_click=self._on_card_click,
-            on_right_click=self._on_card_right_click)
+            on_right_click=self._on_card_right_click,
+            on_valuation=self._on_open_valuation)
 
         self.notebook.select(hold_frame)
 
@@ -1605,12 +1759,20 @@ class PortfolioWindowV2:
         m = tk.Menu(self.root, tearoff=0)
         m.add_command(label="토스에서 열기",
                        command=lambda: self._on_card_click(ticker))
+        m.add_command(label="기업가치 보기",
+                       command=lambda: self._on_open_valuation(ticker, ""))
         m.add_command(label="피크 초기화",
                        command=lambda: self._reset_peak(ticker))
         try:
             m.tk_popup(event.x_root, event.y_root)
         finally:
             m.grab_release()
+
+    def _on_open_valuation(self, ticker, name=""):
+        """📊 버튼 클릭 → 기업가치 모달 열기."""
+        if not (ticker and ticker.isdigit() and len(ticker) == 6):
+            return
+        ValuationDialog(self.root, ticker, name=name)
 
     def _reset_peak(self, ticker):
         if ticker in self.peaks:
@@ -2072,22 +2234,34 @@ class PortfolioWindowV2:
         self._refresh_job = self.root.after(self.interval_ms, self.refresh)
 
     def _render_current_tab(self):
+        # KST 오늘 날짜 — 종목별 trade_date 비교용
+        try:
+            from zoneinfo import ZoneInfo
+            today_kst = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d")
+        except Exception:
+            today_kst = datetime.now().strftime("%Y-%m-%d")
         caches = {
             "investor": self.investor_cache,
             "warning": self.warning_cache,
             "sector": self.sector_cache,
             "consensus": self.consensus_cache,
             "sell_fee_pct": self.config.get("sell_fee_pct", 0.2),
-            "kr_closed": not is_market_open("KR"),
+            "today_kst": today_kst,
             "fade_sleeping": bool(self.fade_sleeping_var.get()),
         }
         def _totals(stocks):
             inv = cur = yes = 0
             for s in stocks:
                 pd = self.last_prices.get(s["ticker"]) or {}
-                inv += s.get("avg_price", 0) * s.get("shares", 0)
-                cur += pd.get("price", 0) * s.get("shares", 0)
-                yes += pd.get("base", 0) * s.get("shares", 0)
+                cur_price = pd.get("price", 0)
+                base_price = pd.get("base", 0)
+                # 휴면(오늘 체결 없음) — base 를 cur 로 맞춰 어제대비 합계 기여 0
+                if today_kst and pd.get("trade_date", "") != today_kst:
+                    base_price = cur_price
+                shares = s.get("shares", 0)
+                inv += s.get("avg_price", 0) * shares
+                cur += cur_price * shares
+                yes += base_price * shares
             return inv, cur, yes
 
         if self.current_tab == self.TAB_US:
@@ -2169,6 +2343,580 @@ class PortfolioWindowV2:
 
     def run(self):
         self.root.mainloop()
+
+
+# ─────────────────────────── 기업가치 다이얼로그 ───────────────────────────
+class ValuationDialog:
+    """한국 종목 기업가치 지표 모달.
+
+    UI 구조: 헤더(이름/현재가/시총) + 5 섹션(가치평가/수익성/주주환원/재무건전성/가격).
+    각 지표는 [라벨] [값] 한 줄, 그 아래에 회색 작은 폰트(10pt)로 설명을 항상 노출.
+    데이터는 fundamentals.fetch_korean_fundamentals 로 백그라운드 fetch.
+    """
+
+    BG = "#ffffff"
+    HEADER_BG = "#f4f5f7"
+    SECTION_BG = "#fafbfc"
+    BORDER = "#e3e6ea"
+    LABEL_FG = "#1f2933"
+    VALUE_FG = "#0f172a"
+    DESC_FG = "#888888"
+    SECTION_TITLE_FG = "#374151"
+    SECTION_SUB_FG = "#9ca3af"
+
+    def __init__(self, parent: tk.Tk, ticker: str, name: str = ""):
+        self.parent = parent
+        self.ticker = ticker
+        self.name = name or ticker
+
+        # 3열 레이아웃 — 화면 폭에 맞춰 조정 (최대 1900, 화면보다 넓으면 축소)
+        try:
+            sw = parent.winfo_screenwidth()
+            sh = parent.winfo_screenheight()
+        except Exception:
+            sw, sh = 1920, 1080
+        win_w = min(1900, max(1300, sw - 60))
+        win_h = min(1000, max(800, sh - 80))
+
+        self.top = tk.Toplevel(parent)
+        self.top.title(f"기업가치 — {self.name} ({ticker})")
+        self.top.geometry(f"{win_w}x{win_h}")
+        self.top.configure(bg=self.BG)
+        self.top.transient(parent)
+
+        # macOS dock icon 강제 활성 + 포커스
+        try:
+            self.top.lift()
+            self.top.focus_force()
+        except Exception:
+            pass
+
+        # 닫기 키 바인딩
+        self.top.bind("<Escape>", lambda e: self._close())
+        self.top.protocol("WM_DELETE_WINDOW", self._close)
+
+        # 동적 wraplength 조정용 — 모든 설명 Label 추적.
+        # 컬럼 폭이 결정되면 (Configure 이벤트) 각 Label 의 wraplength 갱신.
+        # 디바운스 + 변경 시에만 적용으로 오실레이션 방지.
+        self._wrap_labels: list[tuple[tk.Label, tk.Misc]] = []
+        self._refresh_after_id: str | None = None
+        self._last_top_w: int = 0
+
+        self._build_skeleton()
+        self._fetch_async()
+
+    def _close(self):
+        try:
+            self.top.destroy()
+        except Exception:
+            pass
+
+    # ─────────── UI 골격 ───────────
+    def _build_skeleton(self):
+        # 헤더
+        self.header = tk.Frame(self.top, bg=self.HEADER_BG, height=70)
+        self.header.pack(side="top", fill="x")
+        self.header.pack_propagate(False)
+
+        self.title_label = tk.Label(self.header,
+                                     text=f"{self.name}  ({self.ticker})",
+                                     font=_font(15, "bold"),
+                                     bg=self.HEADER_BG, fg=self.LABEL_FG,
+                                     anchor="w")
+        self.title_label.pack(anchor="w", padx=18, pady=(12, 2))
+
+        self.subtitle_label = tk.Label(self.header,
+                                        text="불러오는 중…",
+                                        font=_font(11),
+                                        bg=self.HEADER_BG, fg=self.SECTION_SUB_FG,
+                                        anchor="w")
+        self.subtitle_label.pack(anchor="w", padx=18, pady=(0, 12))
+
+        # 본문 — 스크롤 가능
+        body = tk.Frame(self.top, bg=self.BG)
+        body.pack(side="top", fill="both", expand=True)
+
+        self.canvas = tk.Canvas(body, bg=self.BG, highlightthickness=0,
+                                  yscrollincrement=10)
+        vsb = ttk.Scrollbar(body, orient="vertical",
+                              command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=vsb.set)
+        vsb.pack(side="right", fill="y")
+        self.canvas.pack(side="left", fill="both", expand=True)
+
+        self.inner = tk.Frame(self.canvas, bg=self.BG)
+        self._inner_id = self.canvas.create_window((0, 0), window=self.inner,
+                                                     anchor="nw")
+        self.inner.bind("<Configure>",
+                          lambda e: self.canvas.configure(
+                              scrollregion=self.canvas.bbox("all")))
+        self.canvas.bind("<Configure>",
+                          lambda e: self.canvas.itemconfig(
+                              self._inner_id, width=e.width))
+
+        # 휠 스크롤
+        self.canvas.bind("<Enter>", lambda e: self._bind_wheel())
+        self.canvas.bind("<Leave>", lambda e: self._unbind_wheel())
+
+        # 로딩 placeholder
+        self._loading = tk.Label(self.inner, text="기업가치 정보를 불러오는 중…",
+                                   font=_font(12),
+                                   bg=self.BG, fg=self.SECTION_SUB_FG)
+        self._loading.pack(pady=40)
+
+    def _add_wrap_label(self, label: tk.Label, container: tk.Misc) -> None:
+        """설명 라벨을 추적 → 컨테이너 폭 변경 시 wraplength 갱신."""
+        self._wrap_labels.append((label, container))
+
+    def _schedule_refresh(self) -> None:
+        """디바운스: 마지막 Configure 후 200ms 정지 시 1회만 갱신."""
+        if self._refresh_after_id is not None:
+            try:
+                self.top.after_cancel(self._refresh_after_id)
+            except Exception:
+                pass
+        self._refresh_after_id = self.top.after(200, self._do_refresh)
+
+    def _force_refresh_once(self) -> None:
+        """초기 1회 강제 갱신 (디바운스/변경체크 우회)."""
+        self._last_top_w = 0  # 다음 비교에서 무조건 갱신되도록
+        self._do_refresh()
+
+    def _do_refresh(self) -> None:
+        self._refresh_after_id = None
+        try:
+            cur_w = self.top.winfo_width()
+        except tk.TclError:
+            return
+        # 윈도우 폭이 실제로 바뀐 경우에만 갱신 (반복 호출 방지)
+        if cur_w == self._last_top_w:
+            return
+        self._last_top_w = cur_w
+        for label, container in list(self._wrap_labels):
+            try:
+                w = container.winfo_width()
+            except tk.TclError:
+                continue
+            if w <= 1:
+                continue
+            wrap = max(120, w - 32)
+            try:
+                cur = int(float(label.cget("wraplength")))
+            except (tk.TclError, ValueError):
+                cur = 0
+            # 동일하면 스킵 — 불필요한 재배치 방지
+            if cur == wrap:
+                continue
+            try:
+                label.configure(wraplength=wrap)
+            except tk.TclError:
+                pass
+
+    def _bind_wheel(self):
+        self.canvas.bind_all("<MouseWheel>", self._on_wheel)
+
+    def _unbind_wheel(self):
+        self.canvas.unbind_all("<MouseWheel>")
+
+    def _on_wheel(self, e):
+        d = e.delta
+        if d == 0:
+            return
+        if abs(d) >= 30:
+            step = int(-d / 30)
+        else:
+            step = -d
+        if step == 0:
+            step = -1 if d > 0 else 1
+        self.canvas.yview_scroll(step, "units")
+
+    # ─────────── 데이터 fetch ───────────
+    def _fetch_async(self):
+        def worker():
+            fund: dict = {}
+            cons: dict = {}
+            try:
+                fund = fundamentals.fetch_korean_fundamentals(self.ticker)
+            except Exception as e:
+                fund = {"_error": str(e)}
+            try:
+                cons = fundamentals.fetch_korean_consensus(self.ticker)
+            except Exception as e:
+                cons = {"_error": str(e)}
+            try:
+                self.top.after(0, lambda: self._populate(fund, cons))
+            except Exception:
+                pass
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    # ─────────── 본문 채우기 (3열 레이아웃) ───────────
+    def _populate(self, data: dict, cons: dict):
+        # 헤더 갱신
+        nm = data.get("name") or self.name
+        self.title_label.config(text=f"{nm}  ({self.ticker})")
+        price = data.get("price")
+        mcap = data.get("market_cap_text") or "—"
+        foreign = data.get("foreign_ownership")
+        # 공식 컨센서스 우선, 없으면 단순평균
+        official_target = data.get("consensus_target_official")
+        simple_avg = (cons or {}).get("avg_target")
+        headline_target = official_target or simple_avg
+        bits = []
+        if price:
+            bits.append(f"{int(price):,}원")
+        bits.append(f"시가총액 {mcap}")
+        if foreign is not None:
+            bits.append(f"외국인 {foreign:.2f}%")
+        if headline_target and price:
+            gap = (headline_target - price) / price * 100
+            bits.append(f"목표가 {headline_target:,}원 ({gap:+.1f}%)")
+        elif headline_target:
+            bits.append(f"목표가 {headline_target:,}원")
+        self.subtitle_label.config(text="   ".join(bits))
+
+        # 로딩 제거
+        try:
+            self._loading.destroy()
+        except Exception:
+            pass
+
+        if data.get("_error"):
+            tk.Label(self.inner,
+                      text=f"불러오기 실패: {data['_error']}",
+                      font=_font(11), bg=self.BG, fg="#c0392b",
+                      wraplength=900, justify="left").pack(padx=18, pady=20)
+            return
+
+        any_fund_present = any(
+            data.get(k) not in (None, "", "—")
+            for sec in fundamentals.INDICATOR_SECTIONS
+            for k in sec[2]
+        )
+        if not any_fund_present and not (cons or {}).get("reports"):
+            tk.Label(self.inner,
+                      text="이 종목의 기업가치/컨센서스 정보를 가져올 수 없습니다.\n"
+                           "(ETF·우선주·신규상장 종목 등은 일부 지표가 제공되지 않을 수 있습니다)",
+                      font=_font(11), bg=self.BG, fg=self.SECTION_SUB_FG,
+                      wraplength=900, justify="left").pack(padx=18, pady=20)
+            return
+
+        # 3열 그리드
+        grid = tk.Frame(self.inner, bg=self.BG)
+        grid.pack(fill="both", expand=True, padx=12, pady=(8, 8))
+        cols = []
+        for i in range(3):
+            col = tk.Frame(grid, bg=self.BG)
+            col.grid(row=0, column=i, sticky="nsew", padx=6)
+            grid.grid_columnconfigure(i, weight=1, uniform="col")
+            cols.append(col)
+
+        # 섹션 분배:
+        #   col0: 가치평가 + 수익성
+        #   col1: 주주환원 + 재무건전성 + 가격 통계
+        #   col2: 컨센서스 + 주요주주
+        sec_specs = fundamentals.INDICATOR_SECTIONS
+        # by index: 0=가치평가, 1=수익성, 2=주주환원, 3=재무건전성, 4=가격 통계
+        for sec in sec_specs[:2]:
+            self._render_section(cols[0], *sec, data=data)
+        for sec in sec_specs[2:]:
+            self._render_section(cols[1], *sec, data=data)
+        # col2
+        self._render_consensus_section(cols[2], cons or {}, price, data)
+        self._render_shareholders_section(cols[2], cons or {})
+
+        # 하단 fetch 시각
+        ts = data.get("_fetched_at", "")
+        if ts:
+            tk.Label(self.inner,
+                      text=f"갱신: {ts}    출처: 네이버 금융 / wisereport",
+                      font=_font(9), bg=self.BG, fg=self.SECTION_SUB_FG,
+                      anchor="e").pack(fill="x", padx=18, pady=(4, 12))
+
+        # 첫 레이아웃 안정화(250ms) 후 한 번 강제 갱신 + 이후 리사이즈는 디바운스 처리
+        self.top.after(250, self._force_refresh_once)
+        self.top.bind("<Configure>", lambda e: self._schedule_refresh())
+
+    def _render_section(self, parent: tk.Misc, title: str, sub: str,
+                         keys: list, data: dict):
+        # 섹션 헤더
+        sec = tk.Frame(parent, bg=self.BG)
+        sec.pack(fill="x", pady=(8, 4))
+
+        tk.Label(sec, text=title,
+                  font=_font(13, "bold"),
+                  bg=self.BG, fg=self.SECTION_TITLE_FG,
+                  anchor="w").pack(anchor="w")
+        if sub:
+            tk.Label(sec, text=sub,
+                      font=_font(10),
+                      bg=self.BG, fg=self.SECTION_SUB_FG,
+                      anchor="w").pack(anchor="w")
+
+        body = tk.Frame(parent, bg=self.SECTION_BG,
+                          highlightbackground=self.BORDER, highlightthickness=1)
+        body.pack(fill="x", pady=(2, 0))
+
+        for i, key in enumerate(keys):
+            label = fundamentals.INDICATOR_LABELS.get(key, key)
+            value = data.get(key)
+            value_txt = fundamentals.format_indicator_value(key, value)
+            desc = fundamentals.INDICATOR_DESCRIPTIONS.get(key, "")
+
+            verdict = fundamentals.judge_indicator(key, value, data)
+            if value in (None, ""):
+                value_fg = self.SECTION_SUB_FG
+            elif verdict == "good":
+                value_fg = "#c0392b"
+            elif verdict == "bad":
+                value_fg = "#1f4e8f"
+            else:
+                value_fg = self.VALUE_FG
+
+            row = tk.Frame(body, bg=self.SECTION_BG)
+            row.pack(fill="x", padx=12, pady=(6 if i == 0 else 4, 0))
+
+            top_row = tk.Frame(row, bg=self.SECTION_BG)
+            top_row.pack(fill="x")
+            tk.Label(top_row, text=label,
+                      font=_font(11, "bold"),
+                      bg=self.SECTION_BG, fg=self.LABEL_FG,
+                      anchor="w").pack(side="left")
+            tk.Label(top_row, text=value_txt,
+                      font=_font(11, "bold"),
+                      bg=self.SECTION_BG, fg=value_fg,
+                      anchor="e").pack(side="right")
+
+            if desc:
+                desc_lbl = tk.Label(row, text=desc,
+                                      font=_font(9),
+                                      bg=self.SECTION_BG, fg=self.DESC_FG,
+                                      anchor="w", justify="left",
+                                      wraplength=300)
+                desc_lbl.pack(fill="x", pady=(1, 0))
+                self._add_wrap_label(desc_lbl, parent)
+
+        tk.Frame(body, bg=self.SECTION_BG, height=8).pack(fill="x")
+
+    # ─────────── 컨센서스 섹션 ───────────
+    def _render_consensus_section(self, parent: tk.Misc, cons: dict,
+                                    current_price, fund: dict):
+        sec = tk.Frame(parent, bg=self.BG)
+        sec.pack(fill="x", pady=(8, 4))
+
+        tk.Label(sec, text="🎯 컨센서스",
+                  font=_font(13, "bold"),
+                  bg=self.BG, fg=self.SECTION_TITLE_FG,
+                  anchor="w").pack(anchor="w")
+        tk.Label(sec, text="증권사들이 본 적정 주가",
+                  font=_font(10),
+                  bg=self.BG, fg=self.SECTION_SUB_FG,
+                  anchor="w").pack(anchor="w")
+
+        body = tk.Frame(parent, bg=self.SECTION_BG,
+                          highlightbackground=self.BORDER, highlightthickness=1)
+        body.pack(fill="x", pady=(2, 0))
+
+        reports = cons.get("reports") or []
+        simple_avg = cons.get("avg_target")
+        official_target = (fund or {}).get("consensus_target_official")
+        opinion = (fund or {}).get("consensus_opinion") or ""
+        opinion_score = (fund or {}).get("consensus_score")
+
+        headline_target = official_target or simple_avg
+
+        # 요약 1줄: 평균 목표주가 (네이버 공식)
+        summary = tk.Frame(body, bg=self.SECTION_BG)
+        summary.pack(fill="x", padx=12, pady=(8, 2))
+
+        if headline_target:
+            gap_txt = ""
+            gap_color = self.VALUE_FG
+            if current_price:
+                gap = (headline_target - current_price) / current_price * 100
+                gap_txt = f"  ({gap:+.1f}%)"
+                gap_color = "#c0392b" if gap > 0 else ("#1f4e8f" if gap < 0 else self.VALUE_FG)
+            tk.Label(summary, text="평균 목표주가",
+                      font=_font(11, "bold"),
+                      bg=self.SECTION_BG, fg=self.LABEL_FG,
+                      anchor="w").pack(side="left")
+            tk.Label(summary,
+                      text=f"{headline_target:,}원{gap_txt}",
+                      font=_font(11, "bold"),
+                      bg=self.SECTION_BG, fg=gap_color,
+                      anchor="e").pack(side="right")
+        else:
+            tk.Label(summary, text="컨센서스 데이터 없음",
+                      font=_font(10),
+                      bg=self.SECTION_BG, fg=self.SECTION_SUB_FG,
+                      anchor="w").pack(anchor="w")
+
+        # 요약 2줄: 투자의견 + 점수
+        if opinion or opinion_score is not None:
+            opn_row = tk.Frame(body, bg=self.SECTION_BG)
+            opn_row.pack(fill="x", padx=12, pady=(2, 2))
+            opn_lc = (opinion or "").lower()
+            if any(k in opn_lc for k in ["buy", "매수", "strong"]):
+                opn_fg = "#c0392b"
+            elif any(k in opn_lc for k in ["sell", "매도", "감량", "축소"]):
+                opn_fg = "#1f4e8f"
+            else:
+                opn_fg = self.VALUE_FG
+            score_txt = f" ({opinion_score:.2f}점)" if opinion_score else ""
+            tk.Label(opn_row, text="투자의견",
+                      font=_font(10),
+                      bg=self.SECTION_BG, fg=self.LABEL_FG,
+                      anchor="w").pack(side="left")
+            tk.Label(opn_row, text=f"{opinion}{score_txt}",
+                      font=_font(10, "bold"),
+                      bg=self.SECTION_BG, fg=opn_fg,
+                      anchor="e").pack(side="right")
+
+        # 요약 3줄: 단순평균(참고)
+        if simple_avg and (not official_target or simple_avg != official_target):
+            note_row = tk.Frame(body, bg=self.SECTION_BG)
+            note_row.pack(fill="x", padx=12, pady=(0, 2))
+            n_reports = len([r for r in reports if r.get("target")])
+            tk.Label(note_row,
+                      text=f"참고: 최근 {n_reports}건 단순평균 {simple_avg:,}원",
+                      font=_font(9),
+                      bg=self.SECTION_BG, fg=self.DESC_FG,
+                      anchor="w").pack(anchor="w")
+
+        if reports:
+            tk.Label(body, text=f"최근 리포트 ({len(reports)}건)",
+                      font=_font(9),
+                      bg=self.SECTION_BG, fg=self.SECTION_SUB_FG,
+                      anchor="w").pack(anchor="w", padx=12, pady=(6, 2))
+
+            # 헤더
+            hdr = tk.Frame(body, bg=self.SECTION_BG)
+            hdr.pack(fill="x", padx=12)
+            hdr_font = _font(9)
+            tk.Label(hdr, text="일자",     font=hdr_font, width=10,
+                      bg=self.SECTION_BG, fg=self.SECTION_SUB_FG,
+                      anchor="w").pack(side="left")
+            tk.Label(hdr, text="증권사",    font=hdr_font, width=10,
+                      bg=self.SECTION_BG, fg=self.SECTION_SUB_FG,
+                      anchor="w").pack(side="left")
+            tk.Label(hdr, text="의견",      font=hdr_font, width=6,
+                      bg=self.SECTION_BG, fg=self.SECTION_SUB_FG,
+                      anchor="w").pack(side="left")
+            tk.Label(hdr, text="목표가",    font=hdr_font,
+                      bg=self.SECTION_BG, fg=self.SECTION_SUB_FG,
+                      anchor="e").pack(side="right")
+
+            for rp in reports:
+                row = tk.Frame(body, bg=self.SECTION_BG)
+                row.pack(fill="x", padx=12, pady=(2, 0))
+                opn = rp.get("opinion", "") or "—"
+                tgt = rp.get("target")
+                tgt_txt = f"{tgt:,}원" if tgt else "—"
+                # 의견 색상 (Buy/매수=빨강, Sell/매도=파랑)
+                opn_lc = opn.lower()
+                if any(k in opn_lc for k in ["buy", "매수", "strong"]):
+                    opn_fg = "#c0392b"
+                elif any(k in opn_lc for k in ["sell", "매도", "감량", "축소"]):
+                    opn_fg = "#1f4e8f"
+                elif any(k in opn_lc for k in ["hold", "중립"]):
+                    opn_fg = self.SECTION_SUB_FG
+                else:
+                    opn_fg = self.VALUE_FG
+
+                tk.Label(row, text=rp.get("date", ""), font=_font(10),
+                          width=10, bg=self.SECTION_BG, fg=self.LABEL_FG,
+                          anchor="w").pack(side="left")
+                tk.Label(row, text=rp.get("broker", ""),
+                          font=_font(10, "bold"),
+                          width=10, bg=self.SECTION_BG, fg=self.LABEL_FG,
+                          anchor="w").pack(side="left")
+                tk.Label(row, text=opn, font=_font(10, "bold"),
+                          width=6, bg=self.SECTION_BG, fg=opn_fg,
+                          anchor="w").pack(side="left")
+                tk.Label(row, text=tgt_txt, font=_font(10, "bold"),
+                          bg=self.SECTION_BG, fg=self.VALUE_FG,
+                          anchor="e").pack(side="right")
+
+                # 매칭된 보유지분 (회색 작은 폰트로 다음 줄)
+                holding = rp.get("holding")
+                if holding:
+                    pct = holding.get("pct")
+                    shares = holding.get("shares")
+                    nm = holding.get("name", "")
+                    bits = [f"📦 {nm}"]
+                    if pct is not None:
+                        bits.append(f"{pct:.2f}%")
+                    if shares:
+                        bits.append(f"{_fmt_shares(shares)}")
+                    tk.Label(body, text="    " + "  ·  ".join(bits),
+                              font=_font(9),
+                              bg=self.SECTION_BG, fg=self.DESC_FG,
+                              anchor="w").pack(anchor="w", padx=12)
+
+        # 설명
+        cons_desc = tk.Label(body,
+                              text="증권사가 1년 뒤 적정하다고 본 주가. 평균 갭이 크면 기대수익률이 높지만 그만큼 리스크도 있음.",
+                              font=_font(9),
+                              bg=self.SECTION_BG, fg=self.DESC_FG,
+                              anchor="w", justify="left",
+                              wraplength=300)
+        cons_desc.pack(fill="x", padx=12, pady=(8, 0))
+        self._add_wrap_label(cons_desc, parent)
+        tk.Frame(body, bg=self.SECTION_BG, height=8).pack(fill="x")
+
+    # ─────────── 주요주주 섹션 ───────────
+    def _render_shareholders_section(self, parent: tk.Misc, cons: dict):
+        sec = tk.Frame(parent, bg=self.BG)
+        sec.pack(fill="x", pady=(8, 4))
+
+        tk.Label(sec, text="🏛️ 주요주주",
+                  font=_font(13, "bold"),
+                  bg=self.BG, fg=self.SECTION_TITLE_FG,
+                  anchor="w").pack(anchor="w")
+        tk.Label(sec, text="누가 이 회사 지분을 갖고 있는지",
+                  font=_font(10),
+                  bg=self.BG, fg=self.SECTION_SUB_FG,
+                  anchor="w").pack(anchor="w")
+
+        body = tk.Frame(parent, bg=self.SECTION_BG,
+                          highlightbackground=self.BORDER, highlightthickness=1)
+        body.pack(fill="x", pady=(2, 0))
+
+        shs = cons.get("shareholders") or []
+        if not shs:
+            tk.Label(body, text="주주 정보 없음",
+                      font=_font(10),
+                      bg=self.SECTION_BG, fg=self.SECTION_SUB_FG,
+                      anchor="w").pack(anchor="w", padx=12, pady=10)
+        else:
+            for i, sh in enumerate(shs):
+                row = tk.Frame(body, bg=self.SECTION_BG)
+                row.pack(fill="x", padx=12, pady=(8 if i == 0 else 4, 0))
+                nm = sh.get("name", "")
+                pct = sh.get("pct")
+                shares = sh.get("shares")
+                pct_txt = f"{pct:.2f}%" if pct is not None else "—"
+                shares_txt = _fmt_shares(shares) if shares else "—"
+
+                tk.Label(row, text=nm,
+                          font=_font(11, "bold"),
+                          bg=self.SECTION_BG, fg=self.LABEL_FG,
+                          anchor="w", wraplength=220, justify="left"
+                          ).pack(side="left", fill="x", expand=True)
+                tk.Label(row, text=f"{pct_txt}  {shares_txt}",
+                          font=_font(11, "bold"),
+                          bg=self.SECTION_BG, fg=self.VALUE_FG,
+                          anchor="e").pack(side="right")
+
+        sh_desc = tk.Label(body,
+                            text="5% 이상 보유 대주주 위주. 국민연금/외국 기관 비중이 꾸준하면 기관 신뢰도가 높다는 의미.",
+                            font=_font(9),
+                            bg=self.SECTION_BG, fg=self.DESC_FG,
+                            anchor="w", justify="left",
+                            wraplength=300)
+        sh_desc.pack(fill="x", padx=12, pady=(8, 0))
+        self._add_wrap_label(sh_desc, parent)
+        tk.Frame(body, bg=self.SECTION_BG, height=8).pack(fill="x")
 
 
 if __name__ == "__main__":

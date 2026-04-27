@@ -373,15 +373,17 @@ class TabHoldings(BoxLayout):
         total_current = 0
         total_yesterday = 0
 
-        phase = kr_session_phase()
+        # KST 오늘 — trade_date 비교용 (per-stock 활성 판정)
+        try:
+            from zoneinfo import ZoneInfo
+            today_kst = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d")
+        except Exception:
+            today_kst = datetime.now().strftime("%Y-%m-%d")
 
         def _is_sleeping(t, vol):
-            """per-stock sleeping — REGULAR 항상 활성 / EXTENDED 는 NXT+거래량 / 그외 sleeping"""
-            if phase == "REGULAR":
-                return False
-            if phase == "EXTENDED":
-                return not (nxt_support_cache.get(t) and vol > 0)
-            return True
+            """per-stock sleeping — 오늘 체결(trade_date == today_kst) 이면 활성, 아니면 휴면"""
+            d = prices.get(t, {})
+            return d.get("trade_date", "") != today_kst
 
         # 정렬: 계정(일반→퇴직) → 비sleeping 우선 → 전일대비% 내림차순
         def _sort_key(s):
@@ -403,6 +405,9 @@ class TabHoldings(BoxLayout):
             price_info = prices.get(t, {})
             cur_price = price_info.get("price", 0) or avg
             base_price = price_info.get("base", 0) or cur_price
+            # 휴면(오늘 체결 없음) — base 를 cur 로 맞춰 어제대비 합계 기여 0
+            if price_info.get("trade_date", "") != today_kst:
+                base_price = cur_price
             net_price = cur_price * FEE_MULTIPLIER
 
             total_invested += shares * avg
@@ -456,6 +461,10 @@ class TabHoldings(BoxLayout):
         # 전일대비 — 주당 절대 변동
         day_diff = cur_price - base_price
         day_pct = (day_diff / base_price * 100) if base_price else 0
+        # 오늘 체결 없으면 어제보다 0 (휴면 종목 — 어제 종가 그대로 표시되어 day_diff 부정확)
+        if sleeping:
+            day_diff = 0
+            day_pct = 0
 
         warn_text = warning_cache.get(ticker) or ""
         is_sleeping = sleeping

@@ -229,7 +229,7 @@ def fetch_nxt_supported(ticker: str) -> bool:
 # ─── Toss Invest (한국 종목 실시간 가격) ────────────────────────────
 def fetch_toss_prices_batch(tickers: list) -> dict:
     """Toss API로 여러 한국 종목 현재가 + 전일 종가
-    Returns: {ticker: {"price": int, "base": int, "volume": int}, ...}
+    Returns: {ticker: {"price": int, "base": int, "volume": int, "trade_date": "YYYY-MM-DD"(KST)}, ...}
     """
     if not tickers:
         return {}
@@ -249,10 +249,21 @@ def fetch_toss_prices_batch(tickers: list) -> dict:
         for item in data.get("result", []):
             code = item.get("code", "").lstrip("A")
             if code and item.get("close") is not None:
+                # 마지막 체결 시각 → KST 날짜로 변환 (활성 종목 판정)
+                trade_date = ""
+                raw_dt = item.get("tradeDateTime", "")
+                if raw_dt:
+                    try:
+                        from zoneinfo import ZoneInfo
+                        dt_utc = datetime.fromisoformat(raw_dt.replace("Z", "+00:00"))
+                        trade_date = dt_utc.astimezone(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d")
+                    except Exception:
+                        pass
                 result[code] = {
                     "price": int(item["close"]),
                     "base": int(item.get("base") or 0),
                     "volume": int(item.get("volume") or 0),
+                    "trade_date": trade_date,
                 }
         return result
     except Exception as e:
@@ -501,7 +512,11 @@ investor_cache = Cache(ttl_sec=3600)
 
 def fetch_investor_flow(ticker: str) -> dict | None:
     """토스증권 공개 API — 개인/외국인/기관/연기금 최근 일자 순매수
-    데스크톱 portfolio_window.fetch_investor_flow 와 동일 스펙."""
+    데스크톱 portfolio_window.fetch_investor_flow 와 동일 스펙.
+
+    8시(KST) 이전 — body[0] 이 전부 0 이면 body[1] 직전 영업일로 폴백
+    8시(KST) 이후 — body[0] 그대로 (오늘 데이터, 0이어도 reset 의미)
+    """
     try:
         url = (f"https://wts-info-api.tossinvest.com/api/v1/stock-infos/"
                f"trade/trend/trading-trend?productCode=A{ticker}&size=60")
@@ -514,7 +529,23 @@ def fetch_investor_flow(ticker: str) -> dict | None:
         body = data.get("result", {}).get("body", [])
         if not body:
             return None
+        # 8시 이전 폴백 — 새벽엔 어제 데이터, 8시 이후엔 오늘(reset) 사용
+        net_keys = (
+            "netIndividualsBuyVolume", "netForeignerBuyVolume",
+            "netInstitutionBuyVolume", "netPensionFundBuyVolume",
+        )
+        def _all_zero(b):
+            return all((b.get(k) or 0) == 0 for k in net_keys)
+        try:
+            from zoneinfo import ZoneInfo
+            from datetime import datetime as _dt
+            kst_hour = _dt.now(ZoneInfo("Asia/Seoul")).hour
+        except Exception:
+            from datetime import datetime as _dt
+            kst_hour = _dt.now().hour
         item = body[0]
+        if kst_hour < 8 and _all_zero(item) and len(body) >= 2:
+            item = body[1]
         return {
             "date": item.get("baseDate", ""),
             "개인": int(item.get("netIndividualsBuyVolume", 0)),
