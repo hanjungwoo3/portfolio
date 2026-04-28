@@ -132,7 +132,7 @@ def _name_pill_colors(account, warn_text, pnl_pct, is_stop, is_peak_drop, day_di
         return ("#ffffff", COL_PILL_STOP)
     if warn_text in ("위험", "관리"):
         return ("#ffffff", COL_PILL_DANGER)
-    if warn_text in ("경고", "과열"):
+    if warn_text in ("경고", "과열", "환기"):
         return ("#ffffff", COL_PILL_WARN)
     if warn_text == "정지":
         return ("#444444", COL_PILL_HALT)
@@ -164,7 +164,7 @@ def _badge_bg_for(warn_text, is_stop):
         return "", None
     bg = {
         "위험": "#c0392b", "관리": "#c0392b",
-        "경고": "#e67e22", "과열": "#e67e22",
+        "경고": "#e67e22", "과열": "#e67e22", "환기": "#e67e22",
         "정지": "#888", "주의": "#caa400",
     }.get(warn_text, "#888")
     return warn_text, bg
@@ -573,6 +573,11 @@ class StockCardsCanvas:
                     pass
             kr_closed = minutes_since >= 10
         fade = caches.get("fade_sleeping", False) and kr_closed
+        # 검색 결과 카드 — 이미 보유/그룹에 있는 티커는 강제 페이드
+        existing_groups_map = caches.get("existing_groups", {})
+        ticker_existing = existing_groups_map.get(ticker, []) if account == "검색" else []
+        if ticker_existing:
+            fade = True
         def _fc(color, ratio=0.5):
             return _fade_hex(color, ratio) if fade else color
 
@@ -597,7 +602,11 @@ class StockCardsCanvas:
         zz = "💤 " if kr_closed else ""
         prefix = "[퇴] " if account == "퇴직연금" else ""
         suffix = f" ({shares}주)" if not self.watchlist else ""
-        pill_text = f"  {zz}{prefix}{name}{suffix}  "
+        # 검색 결과 — 이미 등록된 그룹 표시
+        existing_suffix = ""
+        if ticker_existing:
+            existing_suffix = " 📌 " + ",".join(ticker_existing)
+        pill_text = f"  {zz}{prefix}{name}{suffix}{existing_suffix}  "
         pill_fg, pill_bg = _name_pill_colors(account, warn_text, pnl_pct,
                                               is_stop, is_peak_drop, day_diff)
         c.itemconfig(ids["pill_text"], text=pill_text, fill=_fc(pill_fg))
@@ -799,12 +808,18 @@ class StockCardsCanvas:
         self._grouped_total_idx = 0
         self._grouped_max_y_offset = 0
 
-        # 어제대비 등락률 (day_pct) 큰 순 — 모든 탭 동일
+        # 어제대비 등락률 (day_pct) 큰 순 — 모든 탭 동일.
+        # 오늘 체결 없으면 정렬도 0 처리 (단, 자정~08:00 KST 사이엔 어제 변동 유지).
+        today_kst = caches.get("today_kst", "")
+        show_prev = caches.get("show_prev", False)
         def _key(s):
             pd = prices.get(s["ticker"]) or {}
             cur = pd.get("price", 0)
             base = pd.get("base", 0)
             day_pct = ((cur - base) / base * 100) if base else 0
+            if (today_kst and pd.get("trade_date", "") != today_kst
+                    and not show_prev):
+                day_pct = 0
             return -day_pct
         stocks_sorted = sorted(stocks, key=_key)
 
@@ -882,10 +897,16 @@ class StockCardsCanvas:
         """다중 그룹 렌더 — 그룹 사이 빈 행 1줄, 합계는 그룹별 분할 표시.
         groups: [{"stocks": [...], "label": "보유 합계", "totals": (inv, cur, yes)}, ...]
         """
+        today_kst = caches.get("today_kst", "")
+        show_prev = caches.get("show_prev", False)
         def _key(s):
             pd = prices.get(s["ticker"]) or {}
             cur = pd.get("price", 0); base = pd.get("base", 0)
-            return -(((cur - base) / base * 100) if base else 0)
+            day_pct = ((cur - base) / base * 100) if base else 0
+            if (today_kst and pd.get("trade_date", "") != today_kst
+                    and not show_prev):
+                day_pct = 0
+            return -day_pct
 
         pos_map = {}
         y_offset_map = {}
@@ -2259,7 +2280,11 @@ class PortfolioWindowV2:
         cur = getattr(self, "current_tab", "") or ""
         if cur == self.TAB_HOLD:
             m.add_separator()
-            m.add_command(label="💼 보유 삭제",
+            m.add_command(label="➕ 추가 매수",
+                           command=lambda: self._add_buy_dialog(ticker))
+            m.add_command(label="➖ 부분 매도",
+                           command=lambda: self._partial_sell_dialog(ticker))
+            m.add_command(label="💼 보유 삭제 (전량)",
                            command=lambda: self._delete_holding(ticker))
         elif cur.startswith(self.TAB_GROUP_PREFIX):
             group = cur[len(self.TAB_GROUP_PREFIX):]
@@ -2432,6 +2457,7 @@ class PortfolioWindowV2:
             "avg_price": result["avg_price"], "invested": invested,
             "buy_date": result["buy_date"], "market": "KOSPI",
         })
+        self._fetch_warning_single(code)
         self.holdings_data["total_invested"] = (
             self.holdings_data.get("total_invested", 0) + invested)
         self.holdings_data.setdefault("history", []).append({
@@ -2440,6 +2466,233 @@ class PortfolioWindowV2:
         })
         save_json(HOLDINGS_PATH, self.holdings_data)
         self._reload_data()
+
+    # ───────── 추가 매수 / 부분 매도 ─────────
+    def _add_buy_dialog(self, ticker):
+        """➕ 추가 매수 — 평단 재계산 + invested/history 갱신."""
+        from tkinter import messagebox
+        stock = next((s for s in self.holdings if s["ticker"] == ticker), None)
+        if not stock:
+            messagebox.showinfo("추가 매수", "보유 종목이 아님",
+                                  parent=self.root); return
+        name = stock.get("name", ticker)
+        shares_old = int(stock.get("shares", 0))
+        avg_old = int(stock.get("avg_price", 0))
+        invested_old = int(stock.get("invested", shares_old * avg_old))
+
+        prev_tm = self.root.attributes("-topmost")
+        self.root.attributes("-topmost", False)
+        dlg = tk.Toplevel(self.root)
+        dlg.title("➕ 추가 매수")
+        dlg.transient(self.root); dlg.grab_set()
+        dlg.attributes("-topmost", True); dlg.lift(); dlg.focus_force()
+        dlg.bind("<Destroy>", lambda e: self.root.attributes("-topmost", prev_tm)
+                  if e.widget is dlg else None)
+        dlg.resizable(False, False)
+
+        frm = ttk.Frame(dlg, padding=14); frm.grid(sticky="nsew")
+        ttk.Label(frm,
+                   text=f"{name} ({ticker})\n현재: {shares_old:,}주 @ {avg_old:,}원",
+                   justify="left").grid(row=0, column=0, columnspan=2,
+                                          sticky="w", pady=(0, 10))
+        ttk.Separator(frm).grid(row=1, column=0, columnspan=2,
+                                  sticky="ew", pady=(0, 8))
+
+        labels = ["추가 수량", "매수 단가 (원)", "매수일 (YYYYMMDD)"]
+        vars_ = [tk.StringVar() for _ in labels]
+        vars_[2].set(datetime.now().strftime("%Y%m%d"))
+        entries = []
+        for i, (lbl, v) in enumerate(zip(labels, vars_)):
+            ttk.Label(frm, text=lbl).grid(row=2 + i, column=0,
+                                            sticky="w", padx=4, pady=4)
+            e = ttk.Entry(frm, textvariable=v, width=20)
+            e.grid(row=2 + i, column=1, padx=4, pady=4)
+            entries.append(e)
+        entries[0].focus_set()
+
+        preview = ttk.Label(frm, text="", foreground="#666")
+        preview.grid(row=5, column=0, columnspan=2, sticky="w",
+                       padx=4, pady=(8, 0))
+
+        def _update_preview(*_):
+            try:
+                ns = int(vars_[0].get().strip().replace(",", ""))
+                np_ = int(vars_[1].get().strip().replace(",", ""))
+                if ns <= 0 or np_ <= 0:
+                    raise ValueError
+                new_inv = invested_old + ns * np_
+                new_sh = shares_old + ns
+                new_avg = round(new_inv / new_sh)
+                preview.config(
+                    text=f"변경 후: {new_sh:,}주 @ {new_avg:,}원 "
+                         f"(원금 {new_inv:,}원)")
+            except Exception:
+                preview.config(text="")
+        for v in vars_[:2]:
+            v.trace_add("write", _update_preview)
+
+        def _submit():
+            try:
+                ns = int(vars_[0].get().strip().replace(",", ""))
+                np_ = int(vars_[1].get().strip().replace(",", ""))
+            except ValueError:
+                messagebox.showerror("입력 오류",
+                    "수량/단가는 숫자만", parent=dlg); return
+            if ns <= 0 or np_ <= 0:
+                messagebox.showerror("입력 오류",
+                    "수량/단가는 0보다 커야", parent=dlg); return
+            buy_date = vars_[2].get().strip()
+            if not (buy_date.isdigit() and len(buy_date) == 8):
+                messagebox.showerror("입력 오류",
+                    "매수일 YYYYMMDD 8자리", parent=dlg); return
+            new_inv = invested_old + ns * np_
+            new_sh = shares_old + ns
+            new_avg = round(new_inv / new_sh)
+            stock["shares"] = new_sh
+            stock["avg_price"] = new_avg
+            stock["invested"] = int(new_inv)
+            self.holdings_data["total_invested"] = int(
+                self.holdings_data.get("total_invested", 0) + ns * np_)
+            self.holdings_data.setdefault("history", []).append({
+                "date": buy_date, "event": "추가매수",
+                "detail": (f"{name} +{ns:,}주 @{np_:,}원 "
+                            f"(평단 {avg_old:,}→{new_avg:,})"),
+            })
+            save_json(HOLDINGS_PATH, self.holdings_data)
+            dlg.destroy()
+            self._reload_data()
+
+        btns = ttk.Frame(frm); btns.grid(row=6, column=0, columnspan=2,
+                                            pady=(10, 0))
+        ttk.Button(btns, text="확인", command=_submit).pack(side="left", padx=4)
+        ttk.Button(btns, text="취소", command=dlg.destroy
+                    ).pack(side="left", padx=4)
+        dlg.bind("<Return>", lambda e: _submit())
+        dlg.bind("<Escape>", lambda e: dlg.destroy())
+
+    def _partial_sell_dialog(self, ticker):
+        """➖ 부분 매도 — shares 차감, 평단 유지, 손익 history 기록."""
+        from tkinter import messagebox
+        stock = next((s for s in self.holdings if s["ticker"] == ticker), None)
+        if not stock:
+            messagebox.showinfo("부분 매도", "보유 종목이 아님",
+                                  parent=self.root); return
+        name = stock.get("name", ticker)
+        shares_old = int(stock.get("shares", 0))
+        avg_old = int(stock.get("avg_price", 0))
+        invested_old = int(stock.get("invested", shares_old * avg_old))
+        sell_fee_pct = self.config.get("sell_fee_pct", 0.2)
+        if shares_old <= 0:
+            messagebox.showinfo("부분 매도", "보유 수량이 없음",
+                                  parent=self.root); return
+
+        prev_tm = self.root.attributes("-topmost")
+        self.root.attributes("-topmost", False)
+        dlg = tk.Toplevel(self.root)
+        dlg.title("➖ 부분 매도")
+        dlg.transient(self.root); dlg.grab_set()
+        dlg.attributes("-topmost", True); dlg.lift(); dlg.focus_force()
+        dlg.bind("<Destroy>", lambda e: self.root.attributes("-topmost", prev_tm)
+                  if e.widget is dlg else None)
+        dlg.resizable(False, False)
+
+        frm = ttk.Frame(dlg, padding=14); frm.grid(sticky="nsew")
+        ttk.Label(frm,
+                   text=f"{name} ({ticker})\n"
+                         f"현재: {shares_old:,}주 @ {avg_old:,}원\n"
+                         f"매도 수수료(매도가 차감): {sell_fee_pct}%",
+                   justify="left").grid(row=0, column=0, columnspan=2,
+                                          sticky="w", pady=(0, 10))
+        ttk.Separator(frm).grid(row=1, column=0, columnspan=2,
+                                  sticky="ew", pady=(0, 8))
+
+        labels = [f"매도 수량 (최대 {shares_old:,})", "매도 단가 (원)",
+                   "매도일 (YYYYMMDD)"]
+        vars_ = [tk.StringVar() for _ in labels]
+        vars_[2].set(datetime.now().strftime("%Y%m%d"))
+        entries = []
+        for i, (lbl, v) in enumerate(zip(labels, vars_)):
+            ttk.Label(frm, text=lbl).grid(row=2 + i, column=0,
+                                            sticky="w", padx=4, pady=4)
+            e = ttk.Entry(frm, textvariable=v, width=20)
+            e.grid(row=2 + i, column=1, padx=4, pady=4)
+            entries.append(e)
+        entries[0].focus_set()
+
+        preview = ttk.Label(frm, text="", foreground="#666")
+        preview.grid(row=5, column=0, columnspan=2, sticky="w",
+                       padx=4, pady=(8, 0))
+
+        def _update_preview(*_):
+            try:
+                ss = int(vars_[0].get().strip().replace(",", ""))
+                sp = int(vars_[1].get().strip().replace(",", ""))
+                if ss <= 0 or sp <= 0 or ss > shares_old:
+                    raise ValueError
+                fee_mul = 1 - sell_fee_pct / 100
+                proceeds = round(ss * sp * fee_mul)
+                cost_basis = ss * avg_old
+                pnl = proceeds - cost_basis
+                pnl_pct = (pnl / cost_basis * 100) if cost_basis else 0
+                left = shares_old - ss
+                preview.config(
+                    text=f"실현 손익: {pnl:+,}원 ({pnl_pct:+.2f}%)\n"
+                         f"변경 후: {left:,}주 @ {avg_old:,}원")
+            except Exception:
+                preview.config(text="")
+        for v in vars_[:2]:
+            v.trace_add("write", _update_preview)
+
+        def _submit():
+            try:
+                ss = int(vars_[0].get().strip().replace(",", ""))
+                sp = int(vars_[1].get().strip().replace(",", ""))
+            except ValueError:
+                messagebox.showerror("입력 오류",
+                    "수량/단가는 숫자만", parent=dlg); return
+            if ss <= 0 or sp <= 0:
+                messagebox.showerror("입력 오류",
+                    "수량/단가는 0보다 커야", parent=dlg); return
+            if ss > shares_old:
+                messagebox.showerror("입력 오류",
+                    f"매도 수량이 보유 수량({shares_old})보다 큼",
+                    parent=dlg); return
+            if ss == shares_old:
+                if not messagebox.askyesno("전량 매도",
+                    "전량 매도입니다. 보유에서 제거하고 관심으로 이동합니다. 진행할까요?",
+                    parent=dlg):
+                    return
+                dlg.destroy()
+                self._delete_holding(ticker)
+                return
+            sell_date = vars_[2].get().strip()
+            if not (sell_date.isdigit() and len(sell_date) == 8):
+                messagebox.showerror("입력 오류",
+                    "매도일 YYYYMMDD 8자리", parent=dlg); return
+            fee_mul = 1 - sell_fee_pct / 100
+            proceeds = round(ss * sp * fee_mul)
+            cost_basis = ss * avg_old
+            pnl = proceeds - cost_basis
+            stock["shares"] = shares_old - ss
+            stock["invested"] = max(0, invested_old - cost_basis)
+            self.holdings_data["total_invested"] = max(0, int(
+                self.holdings_data.get("total_invested", 0) - cost_basis))
+            self.holdings_data.setdefault("history", []).append({
+                "date": sell_date, "event": "부분매도",
+                "detail": (f"{name} -{ss:,}주 @{sp:,}원 "
+                            f"(실현손익 {pnl:+,}원)"),
+            })
+            save_json(HOLDINGS_PATH, self.holdings_data)
+            dlg.destroy()
+            self._reload_data()
+
+        btns = ttk.Frame(frm); btns.grid(row=6, column=0, columnspan=2,
+                                            pady=(10, 0))
+        ttk.Button(btns, text="확인", command=_submit).pack(side="left", padx=4)
+        ttk.Button(btns, text="취소", command=dlg.destroy
+                    ).pack(side="left", padx=4)
+        dlg.bind("<Return>", lambda e: _submit())
+        dlg.bind("<Escape>", lambda e: dlg.destroy())
 
     def _delete_holding(self, ticker):
         from tkinter import messagebox
@@ -2475,6 +2728,7 @@ class PortfolioWindowV2:
                 "invested": 0, "buy_date": "",
                 "market": stock.get("market", "KOSPI"), "account": "관심",
             })
+            self._fetch_warning_single(ticker)
         save_json(HOLDINGS_PATH, self.holdings_data)
         self._reload_data()
 
@@ -2514,7 +2768,7 @@ class PortfolioWindowV2:
 
         dlg = tk.Toplevel(self.root)
         dlg.title("🔍 종목 검색 / 추가")
-        dlg.geometry("1200x640")
+        dlg.geometry("1300x640")
         dlg.transient(self.root)
         dlg.attributes("-topmost", True); dlg.lift(); dlg.focus_force()
         dlg.bind("<Destroy>", lambda e: self.root.attributes("-topmost", prev_tm)
@@ -2524,12 +2778,16 @@ class PortfolioWindowV2:
         top = tk.Frame(dlg, bg=COL_BG_APP)
         top.pack(side="top", fill="x", padx=10, pady=10)
         tk.Label(top, text="검색", bg=COL_BG_APP, font=_font(12, "bold")
-                  ).pack(side="left")
-        q_var = tk.StringVar()
-        entry = tk.Entry(top, textvariable=q_var, font=_font(13), width=30)
+                  ).pack(side="left", anchor="n")
+        # 다중 행 입력 — 6자리 코드 여러 개를 줄바꿈/공백으로 일괄 검색 가능
+        entry = tk.Text(top, height=4, width=46, font=_font(13),
+                         wrap="word", undo=True)
         entry.pack(side="left", padx=(8, 6))
-        tk.Label(top, text="(종목명 또는 6자리 코드)", bg=COL_BG_APP,
-                  fg=COL_MUTED, font=_font(10)).pack(side="left", padx=(0, 6))
+        tk.Label(top, text="(종목명 1건 또는 6자리 코드 여러 개\n"
+                            "Enter=검색, Shift+Enter=줄바꿈)",
+                  bg=COL_BG_APP, fg=COL_MUTED,
+                  font=_font(10), justify="left"
+                  ).pack(side="left", padx=(0, 6), anchor="n")
 
         status = tk.Label(top, text="", bg=COL_BG_APP, fg=COL_SECONDARY,
                            font=_font(10))
@@ -2577,19 +2835,25 @@ class PortfolioWindowV2:
             on_valuation=self._on_open_valuation)
 
         def do_search():
-            q = q_var.get().strip()
+            import re
+            q = entry.get("1.0", "end").strip()
             if not q:
                 return
             status.config(text="검색 중...", fg=COL_SECONDARY)
             dlg.update_idletasks()
-            # 6자리 코드 직접 입력은 단건 처리
-            if q.isdigit() and len(q) == 6:
+            # 입력에서 6자리 코드 모두 추출 (중복 제거, 순서 유지)
+            codes = list(dict.fromkeys(re.findall(r"\b\d{6}\b", q)))
+            if codes:
+                # 이름은 병렬 fetch — 알 수 없으면 코드로 fallback
+                with ThreadPoolExecutor(max_workers=min(len(codes), 8)) as pool:
+                    names = list(pool.map(_fetch_stock_name, codes))
                 stocks = [{
-                    "ticker": q, "name": _fetch_stock_name(q) or q,
+                    "ticker": c, "name": (n or c),
                     "shares": 0, "avg_price": 0, "invested": 0,
                     "buy_date": "", "market": "KOSPI", "account": "검색",
-                }]
+                } for c, n in zip(codes, names)]
             else:
+                # 6자리 코드 없음 → 이름 자동완성 (Naver)
                 stocks = self._search_stocks(q)
             if not stocks:
                 panel.render([], {}, self.peaks, self.config,
@@ -2597,39 +2861,143 @@ class PortfolioWindowV2:
                 status.config(text="검색 결과 없음", fg=COL_PILL_DANGER)
                 return
             # 가격 fetch
-            krx = [s["ticker"] for s in stocks]
+            krx = [s["ticker"] for s in stocks
+                    if s.get("ticker", "").isdigit()
+                    and len(s["ticker"]) == 6]
             try:
                 prices = fetch_toss_prices_batch(krx) if krx else {}
             except Exception:
                 prices = {}
+            # 외국인/기관·경고·섹터·컨센서스 보강 (캐시 없는 신규 티커만)
+            if krx:
+                status.config(text="투자자/경고/섹터 정보 조회 중...",
+                                fg=COL_SECONDARY)
+                dlg.update_idletasks()
+                self._enrich_search_caches(krx)
+            # 이미 보유/그룹/관심ETF 에 등록된 티커 → 그룹명 매핑
+            existing_groups = {}
+            for s in self.holdings_data.get("holdings", []):
+                t = s.get("ticker", "")
+                acc = s.get("account") or "보유"
+                existing_groups.setdefault(t, []).append(acc)
+            search_caches = self._build_caches(fade=False)
+            search_caches["existing_groups"] = existing_groups
             panel.render(stocks, prices, self.peaks, self.config,
-                          self._build_caches(fade=False))
-            status.config(text=f"{len(stocks)}건 — 우클릭으로 보유/관심 추가",
-                            fg=COL_SECONDARY)
+                          search_caches)
+            dup = sum(1 for s in stocks if existing_groups.get(s["ticker"]))
+            status.config(
+                text=(f"{len(stocks)}건 — 우클릭으로 보유/관심 추가"
+                       + (f" (이미 등록 {dup}건은 흐림 표시)" if dup else "")),
+                fg=COL_SECONDARY)
 
         tk.Button(top, text="🔍 검색", command=do_search,
                    font=_font(11)).pack(side="left")
+        # 클립보드 붙여넣기 버튼 — 단축키 안 먹는 환경 대비
+        tk.Button(top, text="📋 붙여넣기",
+                   command=lambda: (entry.focus_set(), _paste()),
+                   font=_font(11)).pack(side="left", padx=(4, 0))
 
         def _enter(_e=None):
             do_search()
             return "break"
 
-        # macOS 한글 IME 가 Enter 를 확정 키로 가로채는 경우가 있어
-        # KeyPress + KeyRelease + KP_Enter 까지 다중 바인딩 (entry / dlg 양쪽)
+        def _shift_enter(_e=None):
+            entry.insert("insert", "\n")
+            return "break"
+
+        def _paste(_e=None):
+            try:
+                text = dlg.clipboard_get()
+            except Exception:
+                return "break"
+            try:
+                entry.delete("sel.first", "sel.last")
+            except tk.TclError:
+                pass
+            entry.insert("insert", text)
+            return "break"
+
+        def _copy(_e=None):
+            try:
+                text = entry.get("sel.first", "sel.last")
+            except tk.TclError:
+                return "break"
+            dlg.clipboard_clear()
+            dlg.clipboard_append(text)
+            return "break"
+
+        def _cut(_e=None):
+            _copy()
+            try:
+                entry.delete("sel.first", "sel.last")
+            except tk.TclError:
+                pass
+            return "break"
+
+        def _select_all(_e=None):
+            entry.tag_add("sel", "1.0", "end-1c")
+            return "break"
+
+        # Text 위젯: Return = 검색 제출, Shift+Return = 줄바꿈
+        # macOS 한글 IME 가 Enter 를 확정 키로 가로채는 경우가 있어 다중 바인딩
         for seq in ("<Return>", "<KP_Enter>",
                      "<KeyPress-Return>", "<KeyRelease-Return>"):
             entry.bind(seq, _enter)
             dlg.bind(seq, _enter)
+        entry.bind("<Shift-Return>", _shift_enter)
+        # macOS Tk Text 는 Cmd+V/C/X/A 가 기본 바인딩되지 않는 경우가 있어 명시.
+        # entry 와 dlg 양쪽에 바인딩 — 포커스가 어디 있든 동작
+        for seq in ("<Command-v>", "<Command-V>",
+                     "<Mod1-v>", "<Mod1-V>",
+                     "<Meta-v>", "<Meta-V>",
+                     "<Control-v>", "<Control-V>"):
+            entry.bind(seq, _paste)
+            dlg.bind(seq, _paste)
+        for seq in ("<Command-c>", "<Command-C>",
+                     "<Control-c>", "<Control-C>"):
+            entry.bind(seq, _copy)
+        for seq in ("<Command-x>", "<Command-X>",
+                     "<Control-x>", "<Control-X>"):
+            entry.bind(seq, _cut)
+        for seq in ("<Command-a>", "<Command-A>",
+                     "<Control-a>", "<Control-A>"):
+            entry.bind(seq, _select_all)
+
+        # 우클릭 컨텍스트 메뉴 (붙여넣기/복사/잘라내기/전체선택)
+        ctx = tk.Menu(dlg, tearoff=0)
+        ctx.add_command(label="붙여넣기  Cmd+V", command=lambda: _paste())
+        ctx.add_command(label="복사       Cmd+C", command=lambda: _copy())
+        ctx.add_command(label="잘라내기  Cmd+X", command=lambda: _cut())
+        ctx.add_separator()
+        ctx.add_command(label="전체 선택 Cmd+A", command=lambda: _select_all())
+
+        def _show_ctx(e):
+            entry.focus_set()
+            try:
+                ctx.tk_popup(e.x_root, e.y_root)
+            finally:
+                ctx.grab_release()
+            return "break"
+
+        # macOS = Button-2 (보조 클릭), Linux/Win = Button-3
+        for btn in ("<Button-2>", "<Button-3>"):
+            entry.bind(btn, _show_ctx)
+
         dlg.bind("<Escape>", lambda e: dlg.destroy())
-        entry.focus_set()
+        # macOS 에서 attributes("-topmost") 후 즉시 focus_set 이 안 먹는 경우가
+        # 있어 약간의 지연 후 강제 포커스
+        dlg.after(50, entry.focus_set)
 
     def _build_caches(self, fade=False):
         """카드 렌더용 caches dict 생성 (검색 다이얼로그 등 외부에서 재사용)."""
         try:
             from zoneinfo import ZoneInfo
-            today_kst = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d")
+            now_kst = datetime.now(ZoneInfo("Asia/Seoul"))
+            today_kst = now_kst.strftime("%Y-%m-%d")
+            show_prev = now_kst.hour < 8
         except Exception:
             today_kst = datetime.now().strftime("%Y-%m-%d")
+            show_prev = False
         return {
             "investor": self.investor_cache,
             "warning": self.warning_cache,
@@ -2637,6 +3005,7 @@ class PortfolioWindowV2:
             "consensus": self.consensus_cache,
             "sell_fee_pct": self.config.get("sell_fee_pct", 0.2),
             "today_kst": today_kst,
+            "show_prev": show_prev,
             "fade_sleeping": bool(fade),
         }
 
@@ -2658,6 +3027,7 @@ class PortfolioWindowV2:
             "invested": 0, "buy_date": "", "market": "KOSPI",
             "account": group,
         })
+        self._fetch_warning_single(ticker)
         if group not in self.user_groups:
             self.user_groups.append(group)
             self.holdings_data["groups"] = list(self.user_groups)
@@ -2887,11 +3257,16 @@ class PortfolioWindowV2:
                         self.sector_cache[t] = r
             self.sector_cache_ts = now
 
-        if krx and (now - self.warning_cache_ts > self.WARNING_TTL or not self.warning_cache):
-            with ThreadPoolExecutor(max_workers=min(len(krx), 8)) as pool:
-                for t, r in zip(krx, pool.map(fetch_stock_warning, krx)):
-                    self.warning_cache[t] = r
-            self.warning_cache_ts = now
+        if krx:
+            ttl_expired = now - self.warning_cache_ts > self.WARNING_TTL or not self.warning_cache
+            missing = [t for t in krx if t not in self.warning_cache]
+            targets = krx if ttl_expired else missing
+            if targets:
+                with ThreadPoolExecutor(max_workers=min(len(targets), 8)) as pool:
+                    for t, r in zip(targets, pool.map(fetch_stock_warning, targets)):
+                        self.warning_cache[t] = r
+                if ttl_expired:
+                    self.warning_cache_ts = now
 
         if now - self.us_indices_ts > self.US_TTL or not self.us_indices:
             try:
@@ -2913,6 +3288,55 @@ class PortfolioWindowV2:
 
         self.last_prices = prices
         self.root.after(0, self._after_refresh)
+
+    def _fetch_warning_single(self, ticker: str) -> None:
+        """신규 종목 추가 직후 즉시 경고 뱃지 1건 fetch (KRX 6자리만)."""
+        if not (ticker and ticker.isdigit() and len(ticker) == 6):
+            return
+        try:
+            self.warning_cache[ticker] = fetch_stock_warning(ticker) or ""
+        except Exception:
+            pass
+
+    def _enrich_search_caches(self, tickers):
+        """검색 결과 카드 표시용 캐시 보강 (KRX 6자리, 캐시에 없는 티커만).
+        외국인/기관(investor), 경고(warning), 섹터(sector), 컨센서스(consensus)
+        를 티커별로 병렬 fetch. 실패해도 무시."""
+        krx = [t for t in tickers
+                if t and t.isdigit() and len(t) == 6]
+        if not krx:
+            return
+
+        def _one(ticker):
+            if ticker not in self.investor_cache:
+                try:
+                    r = fetch_investor_flow(ticker)
+                    if r:
+                        self.investor_cache[ticker] = r
+                except Exception:
+                    pass
+            if ticker not in self.warning_cache:
+                try:
+                    self.warning_cache[ticker] = fetch_stock_warning(ticker) or ""
+                except Exception:
+                    pass
+            if ticker not in self.sector_cache:
+                try:
+                    r = fetch_stock_sector(ticker)
+                    if r:
+                        self.sector_cache[ticker] = r
+                except Exception:
+                    pass
+            if ticker not in self.consensus_cache:
+                try:
+                    r = fetch_target_consensus(ticker)
+                    if r:
+                        self.consensus_cache[ticker] = r
+                except Exception:
+                    pass
+
+        with ThreadPoolExecutor(max_workers=min(len(krx), 8)) as pool:
+            list(pool.map(_one, krx))
 
     def _sync_historical_peaks(self):
         for s in self.holdings:
@@ -2989,6 +3413,7 @@ class PortfolioWindowV2:
             "consensus": self.consensus_cache,
             "sell_fee_pct": self.config.get("sell_fee_pct", 0.2),
             "today_kst": today_kst,
+            "show_prev": show_prev,
             "fade_sleeping": bool(self.fade_sleeping_var.get()),
         }
         def _totals(stocks):

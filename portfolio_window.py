@@ -87,30 +87,35 @@ def fetch_stock_sector(ticker: str) -> str:
 
 
 def fetch_stock_warning(ticker: str) -> str:
-    """네이버 금융에서 투자경고/주의/위험/단기과열/관리종목/거래정지 스크래핑
-    Returns: 2글자 축약 ("주의", "경고", "위험", "과열", "관리", "정지") 또는 ""
+    """토스 wts-badges 에서 투자경고/주의/위험/단기과열/관리종목/거래정지/주의환기 조회.
+    Returns: 2글자 축약 ("위험","관리","정지","경고","과열","환기","주의") 또는 ""
+    우선순위: 위험 > 관리 > 정지 > 경고 > 과열 > 환기 > 주의
+
+    네이버 금융 마크업 변경으로 기존 스크래핑이 동작하지 않아 토스 공식 뱃지
+    API 로 교체. 응답 예시:
+        {"result":[{"title":"투자주의환기","badgeColor":"yellow",...}]}
+    일반 종목은 result 가 빈 배열.
     """
     try:
         r = requests.get(
-            f"https://finance.naver.com/item/main.naver?code={ticker}",
-            headers={"User-Agent": USER_AGENT}, timeout=5,
-        )
-        soup = BeautifulSoup(r.text, "html.parser")
-        texts = []
-        for em in soup.select("em.warning, em.caution, em.danger, em.notice"):
-            t = em.get_text(strip=True)
-            if t:
-                texts.append(t)
-        # 우선순위: 위험 > 관리 > 정지 > 경고 > 과열 > 주의
-        full = " ".join(texts)
-        for full_tag, short in (("투자위험", "위험"), ("관리종목", "관리"),
-                                 ("거래정지", "정지"), ("투자경고", "경고"),
-                                 ("단기과열", "과열"), ("투자주의", "주의")):
-            if full_tag in full:
-                return short
-        return ""
+            f"https://wts-info-api.tossinvest.com/api/v1/stock-infos/A{ticker}/wts-badges",
+            headers={"User-Agent": USER_AGENT,
+                      "Origin": "https://tossinvest.com",
+                      "Referer": "https://tossinvest.com/"},
+            timeout=5)
+        items = (r.json() or {}).get("result", []) or []
     except Exception:
         return ""
+    titles = " ".join(it.get("title", "") for it in items
+                       if isinstance(it, dict))
+    # 순서 중요: "투자주의환기" 가 "투자주의" 보다 먼저 매칭되어야 함
+    for full_tag, short in (("투자위험", "위험"), ("관리종목", "관리"),
+                             ("거래정지", "정지"), ("투자경고", "경고"),
+                             ("단기과열", "과열"),
+                             ("투자주의환기", "환기"), ("투자주의", "주의")):
+        if full_tag in titles:
+            return short
+    return ""
 
 
 def fetch_target_consensus(ticker: str) -> dict | None:

@@ -327,10 +327,12 @@ def show_json_menu(holdings_data: dict, on_done):
 
 
 def _is_syncable(stock: dict) -> bool:
-    """sync 대상: 일반 보유(account 없음) + 관심 주식(account=="관심")
-    제외: 관심ETF / 퇴직연금 등 기타 계정."""
+    """sync 대상: 일반 보유, 관심, 사용자 정의 그룹(배당주 등).
+    제외: 관심ETF / 퇴직연금 (시스템 예약).
+    데스크톱에서 사용자 그룹을 JSON 으로 가져온 경우 모바일에서 보기 가능하도록
+    확장 (모바일은 그룹 추가 UI 없음)."""
     acc = stock.get("account") or ""
-    return acc in ("", "관심")
+    return acc not in ("관심ETF", "퇴직연금")
 
 
 def show_export_json(holdings_data: dict):

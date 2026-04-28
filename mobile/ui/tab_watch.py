@@ -181,9 +181,14 @@ class TabWatch(BoxLayout):
             today_kst = datetime.now().strftime("%Y-%m-%d")
         return trade_date != today_kst
 
+    # 보유/홀딩스 탭에서 처리하는 account 는 watch 탭에서 제외
+    _HOLDINGS_ACCOUNTS = {"", "퇴직연금"}
+
     def _fetch_and_render(self):
+        # 관심(기본) + 사용자 정의 그룹(배당주 등) + 관심ETF 모두 포함.
+        # JSON 으로 추가된 그룹도 자동 노출 (모바일은 그룹 추가 UI 없음, 보기만 지원)
         watches = [s for s in self.holdings_data.get("holdings", [])
-                   if s.get("account") == "관심"]
+                   if (s.get("account") or "") not in self._HOLDINGS_ACCOUNTS]
         tickers = [s["ticker"] for s in watches]
 
         refresh_warning_sector_cache(tickers)
@@ -207,13 +212,56 @@ class TabWatch(BoxLayout):
             d = prices.get(stock["ticker"], {})
             p, b = d.get("price", 0), d.get("base", 0)
             return ((p - b) / b * 100) if (p and b) else 0
-        watches = sorted(watches, key=_pct, reverse=True)
 
-        for stock in watches:
-            self.container.add_widget(
-                self._build_row(stock,
-                                 prices.get(stock["ticker"], {}),
-                                 peaks))
+        # account 별로 묶음 (관심 → 알파벳 순 사용자 그룹 → 관심ETF 마지막)
+        from collections import defaultdict
+        groups = defaultdict(list)
+        for s in watches:
+            groups[s.get("account") or "관심"].append(s)
+
+        def _group_sort_key(name):
+            if name == "관심":
+                return (0, name)
+            if name == "관심ETF":
+                return (2, name)
+            return (1, name)
+        ordered = sorted(groups.keys(), key=_group_sort_key)
+
+        for gname in ordered:
+            members = sorted(groups[gname], key=_pct, reverse=True)
+            # 그룹이 1 개(관심 only)면 헤더 생략 — 기존 UX 유지
+            if len(ordered) > 1:
+                self.container.add_widget(self._build_group_header(gname,
+                                                                     len(members)))
+            for stock in members:
+                self.container.add_widget(
+                    self._build_row(stock,
+                                     prices.get(stock["ticker"], {}),
+                                     peaks))
+
+    def _build_group_header(self, name, count):
+        """그룹 섹션 헤더 — 회색 바 + 좌측 그룹명, 우측 종목 수."""
+        from kivy.graphics import Color, Rectangle
+        wrap = BoxLayout(orientation="horizontal", size_hint_y=None,
+                          height=sp(28), padding=(sp(10), sp(4)),
+                          spacing=sp(6))
+        with wrap.canvas.before:
+            Color(*rgba("#eef0f3"))
+            wrap._bg = Rectangle(pos=wrap.pos, size=wrap.size)
+        wrap.bind(pos=lambda w, v: setattr(w._bg, "pos", v),
+                   size=lambda w, v: setattr(w._bg, "size", v))
+        emoji = "⭐" if name == "관심" else ("📈" if name == "관심ETF" else "🏷")
+        lbl = Label(text=f"[b]{emoji}  {name}[/b]", markup=True,
+                     font_size=FONT_SMALL, color=rgba("#444"),
+                     halign="left", valign="middle")
+        lbl.bind(size=lambda w, v: setattr(w, "text_size", v))
+        cnt = Label(text=f"{count}개", font_size=FONT_XS,
+                     color=rgba("#888"), size_hint_x=None, width=sp(50),
+                     halign="right", valign="middle")
+        cnt.bind(size=lambda w, v: setattr(w, "text_size", v))
+        wrap.add_widget(lbl)
+        wrap.add_widget(cnt)
+        return wrap
 
     def _build_header(self):
         """헤더 제거 — 카드 자체에 모든 정보 inline 표시"""
@@ -233,7 +281,13 @@ class TabWatch(BoxLayout):
         sector = sector_cache.get(t) or ""
         is_sleeping = self._is_sleeping_stock(t, volume, trade_date)
         # 오늘 체결 없으면 어제보다 0 (휴면 — cur_price=어제 종가, base=그제 종가라 부정확)
-        if is_sleeping:
+        # 단, 새벽(00-08 KST)에는 "그제→어제" 변동을 그대로 노출
+        try:
+            from zoneinfo import ZoneInfo
+            show_prev = datetime.now(ZoneInfo("Asia/Seoul")).hour < 8
+        except Exception:
+            show_prev = False
+        if is_sleeping and not show_prev:
             diff = 0
             pct = 0
             diff_color = sign_color(0)

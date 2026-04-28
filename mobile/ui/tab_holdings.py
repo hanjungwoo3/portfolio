@@ -376,9 +376,14 @@ class TabHoldings(BoxLayout):
         # KST 오늘 — trade_date 비교용 (per-stock 활성 판정)
         try:
             from zoneinfo import ZoneInfo
-            today_kst = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d")
+            now_kst = datetime.now(ZoneInfo("Asia/Seoul"))
+            today_kst = now_kst.strftime("%Y-%m-%d")
+            # 자정 ~ 프리마켓 시작(08:00 KST) 전: Toss 가 여전히 어제 데이터를 주므로
+            # "어제의 어제보다"(그제→어제 변동)를 그대로 노출 (zero out 스킵)
+            show_prev = now_kst.hour < 8
         except Exception:
             today_kst = datetime.now().strftime("%Y-%m-%d")
+            show_prev = False
 
         def _is_sleeping(t, vol):
             """per-stock sleeping — 오늘 체결(trade_date == today_kst) 이면 활성, 아니면 휴면"""
@@ -406,7 +411,9 @@ class TabHoldings(BoxLayout):
             cur_price = price_info.get("price", 0) or avg
             base_price = price_info.get("base", 0) or cur_price
             # 휴면(오늘 체결 없음) — base 를 cur 로 맞춰 어제대비 합계 기여 0
-            if price_info.get("trade_date", "") != today_kst:
+            # 단, 새벽(00-08 KST)에는 "그제→어제" 변동을 그대로 합계에 반영
+            if (price_info.get("trade_date", "") != today_kst
+                    and not show_prev):
                 base_price = cur_price
             net_price = cur_price * FEE_MULTIPLIER
 
@@ -433,7 +440,8 @@ class TabHoldings(BoxLayout):
                 self._build_holding_row(stock, cur_price, base_price, volume,
                                          invested, current_val,
                                          peak=peak, thresholds=thresholds,
-                                         sleeping=sleeping))
+                                         sleeping=sleeping,
+                                         show_prev=show_prev))
 
         # 합계 는 스크롤 밖 고정 컨테이너에 둠 (버튼 위에 항상 표시)
         self.total_container.clear_widgets()
@@ -448,7 +456,8 @@ class TabHoldings(BoxLayout):
 
     def _build_holding_row(self, stock, cur_price, base_price, volume,
                             invested, current_val,
-                            peak=None, thresholds=None, sleeping=False):
+                            peak=None, thresholds=None, sleeping=False,
+                            show_prev=False):
         ticker = stock["ticker"]
         name = stock.get("name", ticker)
         avg = stock.get("avg_price", 0)
@@ -462,7 +471,8 @@ class TabHoldings(BoxLayout):
         day_diff = cur_price - base_price
         day_pct = (day_diff / base_price * 100) if base_price else 0
         # 오늘 체결 없으면 어제보다 0 (휴면 종목 — 어제 종가 그대로 표시되어 day_diff 부정확)
-        if sleeping:
+        # 단, 새벽(00-08 KST)에는 "그제→어제" 변동을 그대로 노출
+        if sleeping and not show_prev:
             day_diff = 0
             day_pct = 0
 
@@ -640,12 +650,22 @@ class TabHoldings(BoxLayout):
                             if vol_str else ""))
         left_col.add_widget(_line(price_markup, h=sp(26)))
 
-        # Line 3: 어제보다 +diff (pct%)
+        # Line 3: 어제보다 +diff / +total_diff (pct%)
+        # shares > 0 인 보유 종목은 1주 변동 / 전체 변동 동시 표시 (데스크톱 v2 동일)
+        shares_for_day = stock.get("shares", 0)
         if day_diff:
             day_color_hex = _c(sign_color(day_diff)).lstrip("#")
-            day_markup = (f"[color={body_hex}]어제보다[/color] "
-                          f"[color={day_color_hex}][b]{format_signed(day_diff)}[/b] "
-                          f"({day_pct:+.2f}%)[/color]")
+            if shares_for_day > 0:
+                total_day = int(day_diff * shares_for_day)
+                day_markup = (f"[color={body_hex}]어제보다[/color] "
+                              f"[color={day_color_hex}]"
+                              f"[b]{format_signed(day_diff)}[/b] / "
+                              f"[b]{format_signed(total_day)}[/b] "
+                              f"({day_pct:+.2f}%)[/color]")
+            else:
+                day_markup = (f"[color={body_hex}]어제보다[/color] "
+                              f"[color={day_color_hex}][b]{format_signed(day_diff)}[/b] "
+                              f"({day_pct:+.2f}%)[/color]")
         else:
             day_markup = f"[color={gray_hex}]어제보다[/color]"
         left_col.add_widget(_line(day_markup))

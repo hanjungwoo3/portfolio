@@ -7,7 +7,7 @@ source.dir = .
 source.include_exts = py,png,jpg,json,ttf
 source.include_patterns = holdings.json,ui/*.py
 
-version = 1.0.0
+version = 1.0.1
 
 # Python / Kivy
 requirements = python3,kivy==2.3.0,requests,urllib3,charset-normalizer,idna,certifi,beautifulsoup4,soupsieve,typing_extensions
