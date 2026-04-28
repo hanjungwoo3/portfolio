@@ -374,16 +374,14 @@ class TabHoldings(BoxLayout):
         total_yesterday = 0
 
         # KST 오늘 — trade_date 비교용 (per-stock 활성 판정)
-        try:
-            from zoneinfo import ZoneInfo
-            now_kst = datetime.now(ZoneInfo("Asia/Seoul"))
-            today_kst = now_kst.strftime("%Y-%m-%d")
-            # 자정 ~ 프리마켓 시작(08:00 KST) 전: Toss 가 여전히 어제 데이터를 주므로
-            # "어제의 어제보다"(그제→어제 변동)를 그대로 노출 (zero out 스킵)
-            show_prev = now_kst.hour < 8
-        except Exception:
-            today_kst = datetime.now().strftime("%Y-%m-%d")
-            show_prev = False
+        # Android 에는 IANA tzdata 가 없어 ZoneInfo("Asia/Seoul") 가 실패할 수 있음.
+        # timezone(timedelta(hours=9)) 는 stdlib 만으로 동작하므로 안전.
+        from datetime import timezone, timedelta
+        now_kst = datetime.now(timezone(timedelta(hours=9)))
+        today_kst = now_kst.strftime("%Y-%m-%d")
+        # 자정 ~ 프리마켓 시작(08:00 KST) 전: Toss 가 여전히 어제 데이터를 주므로
+        # "어제의 어제보다"(그제→어제 변동)를 그대로 노출 (zero out 스킵)
+        show_prev = now_kst.hour < 8
 
         def _is_sleeping(t, vol):
             """per-stock sleeping — 오늘 체결(trade_date == today_kst) 이면 활성, 아니면 휴면"""

@@ -250,13 +250,16 @@ def fetch_toss_prices_batch(tickers: list) -> dict:
             code = item.get("code", "").lstrip("A")
             if code and item.get("close") is not None:
                 # 마지막 체결 시각 → KST 날짜로 변환 (활성 종목 판정)
+                # Android 호환: ZoneInfo 대신 고정 오프셋 timezone 사용
                 trade_date = ""
                 raw_dt = item.get("tradeDateTime", "")
                 if raw_dt:
                     try:
-                        from zoneinfo import ZoneInfo
+                        from datetime import timezone, timedelta
                         dt_utc = datetime.fromisoformat(raw_dt.replace("Z", "+00:00"))
-                        trade_date = dt_utc.astimezone(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d")
+                        trade_date = (dt_utc.astimezone(
+                            timezone(timedelta(hours=9))
+                        ).strftime("%Y-%m-%d"))
                     except Exception:
                         pass
                 result[code] = {
@@ -536,13 +539,9 @@ def fetch_investor_flow(ticker: str) -> dict | None:
         )
         def _all_zero(b):
             return all((b.get(k) or 0) == 0 for k in net_keys)
-        try:
-            from zoneinfo import ZoneInfo
-            from datetime import datetime as _dt
-            kst_hour = _dt.now(ZoneInfo("Asia/Seoul")).hour
-        except Exception:
-            from datetime import datetime as _dt
-            kst_hour = _dt.now().hour
+        # Android 호환: ZoneInfo 대신 고정 오프셋 timezone 사용
+        from datetime import datetime as _dt, timezone, timedelta
+        kst_hour = _dt.now(timezone(timedelta(hours=9))).hour
         item = body[0]
         if kst_hour < 8 and _all_zero(item) and len(body) >= 2:
             item = body[1]

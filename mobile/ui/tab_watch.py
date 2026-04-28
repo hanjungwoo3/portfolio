@@ -173,12 +173,11 @@ class TabWatch(BoxLayout):
 
     def _is_sleeping_stock(self, ticker: str, volume: int,
                              trade_date: str = "") -> bool:
-        """오늘(KST) 체결 있으면 활성 / 없으면 휴면"""
-        try:
-            from zoneinfo import ZoneInfo
-            today_kst = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d")
-        except Exception:
-            today_kst = datetime.now().strftime("%Y-%m-%d")
+        """오늘(KST) 체결 있으면 활성 / 없으면 휴면.
+        Android 호환: ZoneInfo 대신 고정 오프셋 timezone 사용"""
+        from datetime import timezone, timedelta
+        today_kst = (datetime.now(timezone(timedelta(hours=9)))
+                      .strftime("%Y-%m-%d"))
         return trade_date != today_kst
 
     # 보유/홀딩스 탭에서 처리하는 account 는 watch 탭에서 제외
@@ -281,12 +280,10 @@ class TabWatch(BoxLayout):
         sector = sector_cache.get(t) or ""
         is_sleeping = self._is_sleeping_stock(t, volume, trade_date)
         # 오늘 체결 없으면 어제보다 0 (휴면 — cur_price=어제 종가, base=그제 종가라 부정확)
-        # 단, 새벽(00-08 KST)에는 "그제→어제" 변동을 그대로 노출
-        try:
-            from zoneinfo import ZoneInfo
-            show_prev = datetime.now(ZoneInfo("Asia/Seoul")).hour < 8
-        except Exception:
-            show_prev = False
+        # 단, 새벽(00-08 KST)에는 "그제→어제" 변동을 그대로 노출.
+        # Android 호환: ZoneInfo 대신 고정 오프셋 timezone 사용 (IANA tzdata 불필요)
+        from datetime import timezone, timedelta
+        show_prev = datetime.now(timezone(timedelta(hours=9))).hour < 8
         if is_sleeping and not show_prev:
             diff = 0
             pct = 0
